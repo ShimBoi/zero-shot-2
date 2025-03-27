@@ -13,9 +13,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import efficientnet
-import film_conditioning
-import token_learner
+import improve.custom.models.efficientnet as efficientnet
+import improve.custom.models.film_conditioning as film_conditioning
+import improve.custom.models.token_learner as token_learner
 
 
 class FFNOptions(enum.Enum):

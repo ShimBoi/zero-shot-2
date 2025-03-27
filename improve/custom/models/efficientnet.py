@@ -13,7 +13,7 @@ from flax.linen import initializers
 import jax
 from jax import numpy as jnp
 
-import film_conditioning
+from improve.custom.models import film_conditioning
 
 
 MEAN_RGB = [0.485, 0.456, 0.406]

@@ -13,9 +13,9 @@ from skrl import config, logger
 from improve.custom.algo.base import Agent
 from skrl.memories.jax import Memory
 from skrl.models.jax import Model
-from skrl.resources.optimizers.jax import Adam
 from skrl.resources.schedulers.jax import KLAdaptiveLR
 
+from improve.custom.optimizers.adam import Adam
 
 # fmt: off
 # [start-config-dict-jax]
@@ -116,7 +116,7 @@ def compute_gae(
 
 
 # https://jax.readthedocs.io/en/latest/faq.html#strategy-1-jit-compiled-helper-function
-@jax.jit
+# @jax.jit
 def _compute_gae(
     rewards: jax.Array,
     dones: jax.Array,
@@ -146,7 +146,7 @@ def _compute_gae(
     return returns, advantages
 
 
-@functools.partial(jax.jit, static_argnames=("policy_act", "get_entropy", "entropy_loss_scale"))
+# @functools.partial(jax.jit, static_argnames=("policy_act", "get_entropy", "entropy_loss_scale"))
 def _update_policy(
     policy_act,
     policy_state_dict,
@@ -189,7 +189,7 @@ def _update_policy(
     return grad, policy_loss, entropy_loss, kl_divergence, stddev
 
 
-@functools.partial(jax.jit, static_argnames=("value_act", "clip_predicted_values"))
+# @functools.partial(jax.jit, static_argnames=("value_act", "clip_predicted_values"))
 def _update_value(
     value_act,
     value_state_dict,
@@ -575,6 +575,9 @@ class PPO(Agent):
                 sampled_advantages,
             ) in sampled_batches:
 
+                ### TODO: Reshape img tensors from memory (jax requires 1D)
+                sampled_states = jnp.reshape(sampled_states, (sampled_states.shape[0], 256, 256, 3))
+                
                 sampled_states = self._state_preprocessor(
                     sampled_states, train=not epoch)
 

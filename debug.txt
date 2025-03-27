@@ -1,0 +1,50 @@
+Importing module 'gym_38' (/home/zero-shot/jshim12/zero-shot-2/isaacgym/python/isaacgym/_bindings/linux-x86_64/gym_38.so)
+Setting GYM_USD_PLUG_INFO_PATH to /home/zero-shot/jshim12/zero-shot-2/isaacgym/python/isaacgym/_bindings/linux-x86_64/usd/plugInfo.json
+PyTorch version 2.4.1+cu121
+Device count 1
+/home/zero-shot/jshim12/zero-shot-2/isaacgym/python/isaacgym/_bindings/src/gymtorch
+ninja: no work to do.
+[Warning] [carb.gym.plugin] useGpu is set, forcing single scene (0 subscenes)
+Not connected to PVD
++++ Using GPU PhysX
+Physics Engine: PhysX
+Physics Device: cuda:0
+GPU Pipeline: enabled
+
+Isaac Gym environment (Cartpole)
+  |-- name: Cartpole
+  |-- physics_engine: physx
+  |     |-- numEnvs: 1
+  |     |-- envSpacing: 4.0
+  |     |-- resetDist: 3.0
+  |     |-- maxEffort: 400.0
+  |     |-- clipObservations: 5.0
+  |     |-- clipActions: 1.0
+  |     |     |-- assetRoot: ../../assets
+  |     |     |-- assetFileName: urdf/cartpole.urdf
+  |     |-- enableCameraSensors: True
+  |     |-- dt: 0.0166
+  |     |-- substeps: 2
+  |     |-- up_axis: z
+  |     |-- use_gpu_pipeline: True
+  |     |-- gravity: [0.0, 0.0, -9.81]
+  |     |     |-- num_threads: 4
+  |     |     |-- solver_type: 1
+  |     |     |-- use_gpu: True
+  |     |     |-- num_position_iterations: 4
+  |     |     |-- num_velocity_iterations: 0
+  |     |     |-- contact_offset: 0.02
+  |     |     |-- rest_offset: 0.001
+  |     |     |-- bounce_threshold_velocity: 0.2
+  |     |     |-- max_depenetration_velocity: 100.0
+  |     |     |-- default_buffer_size_multiplier: 2.0
+  |     |     |-- max_gpu_contact_pairs: 1048576
+  |     |     |-- num_subscenes: 4
+  |     |     |-- contact_collection: 0
+  |     |-- randomize: False
+Error: FBX library failed to load - importing FBX data will not succeed. Message: No module named 'fbx'
+FBX tools must be installed from https://help.autodesk.com/view/FBX/2020/ENU/?guid=FBX_Developer_Help_scripting_with_python_fbx_installing_python_fbx_html
+Box(0, 255, (256, 256, 3), uint8)
+  0%|          | 0/1600 [00:00<?, ?it/s]  0%|          | 1/1600 [00:38<17:00:08, 38.28s/it]  0%|          | 2/1600 [01:04<13:57:32, 31.45s/it]  0%|          | 3/1600 [01:31<12:54:52, 29.11s/it]  0%|          | 4/1600 [01:57<12:26:52, 28.08s/it]  0%|          | 5/1600 [02:24<12:10:53, 27.49s/it]  0%|          | 6/1600 [02:50<12:00:42, 27.13s/it]Video saved as simulation_video_6.mp4
+  0%|          | 7/1600 [03:17<11:58:29, 27.06s/it]  0%|          | 8/1600 [03:43<11:51:04, 26.80s/it]  1%|          | 9/1600 [04:10<11:47:30, 26.68s/it]  1%|          | 10/1600 [04:36<11:43:54, 26.56s/it]  1%|          | 11/1600 [05:02<11:41:07, 26.47s/it]  1%|          | 12/1600 [05:29<11:40:42, 26.47s/it]  1%|          | 13/1600 [05:55<11:39:58, 26.46s/it]Video saved as simulation_video_13.mp4
+  1%|          | 14/1600 [06:21<11:37:05, 26.37s/it]  1%|          | 15/1600 [06:48<11:36:23, 26.36s/it]  1%|          | 15/1600 [08:04<14:12:49, 32.28s/it]

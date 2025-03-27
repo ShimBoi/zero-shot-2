@@ -167,13 +167,13 @@ class Trainer:
 
     def create_video_from_images(self, timestep):
         if self.images:
-            frame_height, frame_width, _ = self.images[0].shape
+            frame_height, frame_width, _ = self.images[0][0].shape
             video_name = f"simulation_video_{timestep}.mp4"
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             video_writer = cv2.VideoWriter(video_name, fourcc, 30, (frame_width, frame_height))
 
             for image in self.images:
-                image = image.cpu().detach().numpy().astype(np.uint8)
+                image = image.astype(np.uint8)
                 video_writer.write(image)
 
             video_writer.release()
@@ -197,7 +197,6 @@ class Trainer:
 
         # reset env
         states, infos = self.env.reset()
-
         for timestep in tqdm.tqdm(
             range(self.initial_timestep, self.timesteps), disable=self.disable_progressbar, file=sys.stdout
         ):
@@ -214,7 +213,7 @@ class Trainer:
 
                 # render scene
                 if not self.headless:
-                    self.images.append(self.env.render())
+                    self.images.append(next_states)
 
 
                 # record the environments' transitions
@@ -230,7 +229,6 @@ class Trainer:
                     timesteps=self.timesteps,
                 )
 
-                print(terminated[0], truncated[0])
                 if terminated[0] or truncated[0]:
                     self.create_video_from_images(timestep)
                     self.images = []
@@ -283,7 +281,7 @@ class Trainer:
 
                 # render scene
                 if not self.headless:
-                    self.images.append(self.env.render())
+                    self.images.append(next_states)
 
                 # write data to TensorBoard
                 self.agents.record_transition(

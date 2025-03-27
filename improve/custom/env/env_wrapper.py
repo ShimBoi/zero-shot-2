@@ -13,6 +13,9 @@ from skrl.envs.wrappers.jax.isaaclab_envs import IsaacLabMultiAgentWrapper, Isaa
 from skrl.envs.wrappers.jax.omniverse_isaacgym_envs import OmniverseIsaacGymWrapper
 from skrl.envs.wrappers.jax.pettingzoo_envs import PettingZooWrapper
 
+import gymnasium as gym
+import numpy as np
+
 
 __all__ = ["wrap_env", "Wrapper", "MultiAgentEnvWrapper"]
 
@@ -86,7 +89,8 @@ def wrap_env(env: Any, wrapper: str = "auto", verbose: bool = True) -> Union[Wra
                         return True
             return False
 
-        base_classes = [str(base).replace("<class '", "").replace("'>", "") for base in env.__class__.__bases__]
+        base_classes = [str(base).replace("<class '", "").replace(
+            "'>", "") for base in env.__class__.__bases__]
         try:
             base_classes += [
                 str(base).replace("<class '", "").replace("'>", "") for base in env.unwrapped.__class__.__bases__
@@ -179,3 +183,45 @@ def wrap_env(env: Any, wrapper: str = "auto", verbose: bool = True) -> Union[Wra
         return env_wrapper(env)
     else:
         raise ValueError(f"Unknown wrapper type: {wrapper}")
+
+
+class ImageObservationWrapper(Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self._observation_space = gym.spaces.Box(
+            low=0,  
+            high=255,
+            shape=(256, 256, 3),
+            dtype=np.uint8,
+        )
+
+    @property
+    def observation_space(self):
+        return self._observation_space
+
+    def reset(self):
+        states, infos = self._env.reset()
+        image = self._env.render()
+        if image.sum() == 0:
+            raise ValueError("Image rendering failed during reset.")
+        
+        if self._env.num_envs == 1:
+            image = np.expand_dims(image, axis=0)
+        
+        return image, infos
+
+    def step(self, actions):
+        next_states, rewards, terminated, truncated, infos = self._env.step(
+            actions)
+        image = self._env.render()
+
+        if image.sum() == 0:
+            raise ValueError("Image rendering failed during step.")
+        
+        if self._env.num_envs == 1:
+            image = np.expand_dims(image, axis=0)
+        
+        return image, rewards, terminated, truncated, infos
+
+    def close(self):
+        self._env.close()
