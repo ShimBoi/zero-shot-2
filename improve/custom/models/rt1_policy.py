@@ -144,7 +144,7 @@ class RT1Policy(base.Model):
 
         outputs = {}
         outputs['net_output'] = action_logits
-        outputs["stddev"] = jnp.full_like(log_prob, jnp.nan)
+        outputs["stddev"] = jnp.zeros_like(log_prob)
 
         # # only select the 7 DOF action logits
         # action_logits = action_logits[:, :7]

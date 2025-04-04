@@ -1,0 +1,48 @@
+Importing module 'gym_38' (/home/jay/jshim12/zero-shot-2/isaacgym/python/isaacgym/_bindings/linux-x86_64/gym_38.so)
+Setting GYM_USD_PLUG_INFO_PATH to /home/jay/jshim12/zero-shot-2/isaacgym/python/isaacgym/_bindings/linux-x86_64/usd/plugInfo.json
+PyTorch version 2.4.1+cu121
+Device count 1
+/home/jay/jshim12/zero-shot-2/isaacgym/python/isaacgym/_bindings/src/gymtorch
+ninja: no work to do.
+[Warning] [carb.gym.plugin] useGpu is set, forcing single scene (0 subscenes)
+Not connected to PVD
++++ Using GPU PhysX
+Physics Engine: PhysX
+Physics Device: cuda:0
+GPU Pipeline: enabled
+
+Isaac Gym environment (Cartpole)
+  |-- name: Cartpole
+  |-- physics_engine: physx
+  |     |-- numEnvs: 1
+  |     |-- envSpacing: 4.0
+  |     |-- resetDist: 3.0
+  |     |-- maxEffort: 400.0
+  |     |-- clipObservations: 5.0
+  |     |-- clipActions: 1.0
+  |     |     |-- assetRoot: ../../assets
+  |     |     |-- assetFileName: urdf/cartpole.urdf
+  |     |-- enableCameraSensors: True
+  |     |-- dt: 0.0166
+  |     |-- substeps: 2
+  |     |-- up_axis: z
+  |     |-- use_gpu_pipeline: True
+  |     |-- gravity: [0.0, 0.0, -9.81]
+  |     |     |-- num_threads: 4
+  |     |     |-- solver_type: 1
+  |     |     |-- use_gpu: True
+  |     |     |-- num_position_iterations: 4
+  |     |     |-- num_velocity_iterations: 0
+  |     |     |-- contact_offset: 0.02
+  |     |     |-- rest_offset: 0.001
+  |     |     |-- bounce_threshold_velocity: 0.2
+  |     |     |-- max_depenetration_velocity: 100.0
+  |     |     |-- default_buffer_size_multiplier: 2.0
+  |     |     |-- max_gpu_contact_pairs: 1048576
+  |     |     |-- num_subscenes: 4
+  |     |     |-- contact_collection: 0
+  |     |-- randomize: False
+Error: FBX library failed to load - importing FBX data will not succeed. Message: No module named 'fbx'
+FBX tools must be installed from https://help.autodesk.com/view/FBX/2020/ENU/?guid=FBX_Developer_Help_scripting_with_python_fbx_installing_python_fbx_html
+Box(0, 255, (256, 256, 3), uint8)
+  0%|          | 0/1600 [00:00<?, ?it/s]  0%|          | 0/1600 [04:41<?, ?it/s]

@@ -146,7 +146,7 @@ def _compute_gae(
     return returns, advantages
 
 
-# @functools.partial(jax.jit, static_argnames=("policy_act", "get_entropy", "entropy_loss_scale"))
+@functools.partial(jax.jit, static_argnames=("policy_act", "get_entropy", "entropy_loss_scale"))
 def _update_policy(
     policy_act,
     policy_state_dict,
@@ -175,10 +175,9 @@ def _update_policy(
             jnp.clip(ratio, 1.0 - ratio_clip, 1.0 + ratio_clip)
 
         # compute entropy loss
-        entropy_loss = 0
-        if entropy_loss_scale:
-            entropy_loss = -entropy_loss_scale * \
-                get_entropy(outputs["stddev"], role="policy").mean()
+        entropy_loss = jnp.where(-entropy_loss_scale * \
+            get_entropy(outputs["stddev"], role="policy").mean()
+        )
 
         return -jnp.minimum(surrogate, surrogate_clipped).mean(), (entropy_loss, kl_divergence, outputs["stddev"])
 
