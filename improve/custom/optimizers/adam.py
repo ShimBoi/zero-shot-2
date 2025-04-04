@@ -8,38 +8,34 @@ import optax
 
 from skrl.models.jax import Model
 from flax.core.frozen_dict import FrozenDict
+from flax.core import freeze, unfreeze
 
+def _mask_gradient(grad, mask):
+    return jax.tree_map(lambda g, m: g * m, grad, mask)
 
-def _apply_updates(params, updates):
-    """Wrapper around optax.apply_updates that preserves FrozenDict structure"""
-    # Convert FrozenDict to dict for optax
-    if isinstance(params, FrozenDict):
-        unfrozen_params = params.unfreeze()
-        updated_params = optax.apply_updates(unfrozen_params, updates)
-        # Re-freeze while preserving the original FrozenDict structure
-        return FrozenDict(updated_params)
-    return optax.apply_updates(params, updates)
-
-# https://jax.readthedocs.io/en/latest/faq.html#strategy-1-jit-compiled-helper-function
 @functools.partial(jax.jit, static_argnames=("transformation"))
 def _step(transformation, grad, state, state_dict):
+
     # optax transform
     params, optimizer_state = transformation.update(grad, state, state_dict.params)
     # apply transformation
-    params = _apply_updates(state_dict.params, params)
+    params = optax.apply_updates(state_dict.params, params)
     return optimizer_state, state_dict.replace(params=params)
 
 
-@functools.partial(jax.jit, static_argnames=("transformation"))
+# @functools.partial(jax.jit, static_argnames=("transformation"))
 def _step_with_scale(transformation, grad, state, state_dict, scale):
+    unfrozen_params = unfreeze(state_dict.params)
+    unrfozen_grads = unfreeze(grad)
+
     # optax transform
-    params, optimizer_state = transformation.update(grad, state, state_dict.params)
+    params, optimizer_state = transformation.update(unrfozen_grads, state, unfrozen_params)
     # custom scale
     # https://optax.readthedocs.io/en/latest/api/transformations.html#optax.scale
     params = jax.tree_util.tree_map(lambda params: scale * params, params)
     # apply transformation
-    params = _apply_updates(state_dict.params, params)
-    return optimizer_state, state_dict.replace(params=params)
+    params = optax.apply_updates(unfrozen_params, params)
+    return optimizer_state, state_dict.replace(params=params)   
 
 
 class Adam:
@@ -124,4 +120,5 @@ class Adam:
         if grad_norm_clip > 0:
             transformation = optax.chain(optax.clip_by_global_norm(grad_norm_clip), transformation)
 
-        return Optimizer._create(transformation=transformation, state=transformation.init(model.state_dict.params))
+        params = unfreeze(model.state_dict.params)
+        return Optimizer._create(transformation=transformation, state=transformation.init(params))
