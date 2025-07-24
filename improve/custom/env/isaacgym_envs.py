@@ -1,8 +1,6 @@
 from typing import Any, Tuple, Union
 
 import gymnasium
-import isaacgym
-from isaacgym import gymapi, gymtorch
 
 import jax
 import jax.dlpack as jax_dlpack
@@ -147,11 +145,6 @@ class IsaacGymPreview3Wrapper(Wrapper):
         self._observations = None
         self._info = {}
 
-        self.gym = env.gym
-        self.sim = env.sim
-        self.cam_handle = env.cam_handle  # Use the single camera from the env
-        self.env_ptr = env.envs[0]
-
     @property
     def observation_space(self) -> gymnasium.Space:
         """Observation space"""
@@ -171,6 +164,20 @@ class IsaacGymPreview3Wrapper(Wrapper):
         except:
             pass
         return None
+
+    def _get_observation(self, observations):
+        """Get the observation from the environment"""
+        image = _torch2jax(flatten_tensorized_space(tensorize_space(
+            self.observation_space['image'], observations["image"])))
+        vector = _torch2jax(tensorize_space(
+            self.observation_space['vector'], observations["vector"]))
+        if getattr(self._env, "_use_camera_obs"):
+            return image
+        else:
+            return {
+                "vector": vector,
+                "image": image
+            }
 
     def step(self, actions: Union[np.ndarray, jax.Array]) -> Tuple[
         Union[np.ndarray, jax.Array],
@@ -194,15 +201,14 @@ class IsaacGymPreview3Wrapper(Wrapper):
                 unflatten_tensorized_space(self.action_space, actions)
             )
 
-        observations = flatten_tensorized_space(
-            tensorize_space(self.observation_space, observations["obs"]))
+        self._observations = self._get_observation(observations) 
+
         terminated = terminated.to(dtype=torch.int8)
         truncated = (
             self._info["time_outs"].to(
                 dtype=torch.int8) if "time_outs" in self._info else torch.zeros_like(terminated)
         )
 
-        self._observations = _torch2jax(observations, self._jax)
         return (
             self._observations,
             _torch2jax(reward.view(-1, 1), self._jax),
@@ -219,29 +225,13 @@ class IsaacGymPreview3Wrapper(Wrapper):
         """
         if self._reset_once:
             observations = self._env.reset()
-            observations = flatten_tensorized_space(
-                tensorize_space(self.observation_space, observations["obs"]))
-            self._observations = _torch2jax(observations, self._jax)
+            self._observations = self._get_observation(observations)
             self._reset_once = False
         return self._observations, self._info
 
     def render(self, *args, **kwargs) -> None:
         """Render the environment"""
-        self._env.gym.simulate(self.sim)
-        self._env.gym.fetch_results(self.sim, True)
-        self._env.gym.step_graphics(self.sim)
-        self._env.gym.render_all_camera_sensors(self.sim)
-
-        cam_handle = self._env.cam_handle
-        cam_image = self._env.capture_image(
-            self.gym, self.sim, self.env_ptr, cam_handle)
-
-        if cam_image is not None:
-            cam_image = cam_image[:, :, :3]
-        else:
-            raise Exception("No image received from render")
-
-        return cam_image
+        return None
 
     def close(self) -> None:
         """Close the environment"""

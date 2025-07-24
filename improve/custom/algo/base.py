@@ -8,18 +8,18 @@ import pickle
 import gymnasium
 
 import flax
+import flax.linen as nn
 import jax
 import numpy as np
 
 from skrl import config, logger
 from skrl.memories.jax import Memory
-from skrl.models.jax import Model
 
 
 class Agent:
     def __init__(
         self,
-        models: Mapping[str, Model],
+        models,
         memory: Optional[Union[Memory, Tuple[Memory]]] = None,
         observation_space: Optional[Union[int,
                                           Tuple[int], gymnasium.Space]] = None,
@@ -158,10 +158,11 @@ class Agent:
         # setup Weights & Biases
         if self.cfg.get("experiment", {}).get("wandb", False):
             # save experiment configuration
-            # try:
-            #     models_cfg = {k: v.net._modules for (k, v) in self.models.items()}
-            # except AttributeError:
-            #     models_cfg = {k: v._modules for (k, v) in self.models.items()}
+            try:
+                models_cfg = {k: v.net._modules for (
+                    k, v) in self.models.items()}
+            except AttributeError:
+                models_cfg = {k: v._modules for (k, v) in self.models.items()}
             wandb_config = {**self.cfg, **trainer_cfg}  # , **models_cfg}
             # set default values
             wandb_kwargs = copy.deepcopy(self.cfg.get(
@@ -264,8 +265,6 @@ class Agent:
                 self.writer.add_scalar(k, np.min(v), timestep)
             elif k.endswith("(max)"):
                 self.writer.add_scalar(k, np.max(v), timestep)
-            elif k.startswith("Success"):
-                self.writer.add_scalar(k, int(np.mean(v)), timestep)
             else:
                 self.writer.add_scalar(k, np.mean(v), timestep)
         # reset data containers for next iteration
@@ -401,18 +400,6 @@ class Agent:
                 self._track_timesteps.extend(
                     self._cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
 
-#                successful_episodes = (truncated[finished_episodes] == 1).sum()
-#                total_finished_episodes = finished_episodes.size
-#                success_percentage = (
-#                    successful_episodes / total_finished_episodes) * 100
-#
-#                print(f"successful ep: {successful_episodes}, \
-#                finished ep: {total_finished_episodes}, success_percentage: {success_percentage}")
-#
-#                # Log success percentage
-#                self.tracking_data["Success / Percentage"].append(
-#                    success_percentage)
-
                 # reset the cumulative rewards and timesteps
                 self._cumulative_rewards[finished_episodes] = 0
                 self._cumulative_timesteps[finished_episodes] = 0
@@ -501,8 +488,7 @@ class Agent:
                         pass  # TODO: raise NotImplementedError
                 else:
                     logger.warning(
-                        f"Cannot load the {name} module. \
-                        The agent doesn't have such an instance")
+                        f"Cannot load the {name} module. The agent doesn't have such an instance")
 
     def migrate(
         self,
