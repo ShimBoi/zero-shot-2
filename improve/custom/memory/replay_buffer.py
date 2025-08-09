@@ -87,7 +87,6 @@ class ReplayBuffer:
             if arr.ndim == 2 and arr.shape[-1] == 1:
                 # convert (num_envs, 1) to (num_envs,)
                 arr = arr.squeeze(-1)
-                
             self._buffers[name][idx] = arr
         self._pos += 1
 

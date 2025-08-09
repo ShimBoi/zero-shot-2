@@ -67,8 +67,8 @@ class MLPActorCriticPolicy:
                 if "params" in ckpt:
                     self.variables = {"params": ckpt["params"]}
 
-    def _run_action_inference(self, obs, rng):
-        mu, sigma, value = self.model.apply(self.variables, obs)
+    def _run_action_inference(self, variables, obs, rng):
+        mu, sigma, value = self.model.apply(variables, obs)
 
         actions = mu + sigma * jax.random.normal(rng, mu.shape)
 
@@ -80,7 +80,7 @@ class MLPActorCriticPolicy:
             obs = jnp.expand_dims(obs, 0)  # make batch dimension
 
         self.rng, rng = jax.random.split(self.rng)
-        actions, logp, self._value = self._run_action_inference_jit(obs, rng)
+        actions, logp, self._value = self._run_action_inference_jit(self.variables, obs, rng)
         return actions, logp
 
     def value(self):
