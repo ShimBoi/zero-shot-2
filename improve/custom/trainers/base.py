@@ -71,6 +71,7 @@ class Trainer:
         self.stochastic_evaluation = self.cfg.get(
             "stochastic_evaluation", False)
         self.output_folder = self.cfg.get("output_folder", "output")
+        self._save_video = self.cfg.get("save_video", False)
 
         self.initial_timestep = 0
 
@@ -162,7 +163,8 @@ class Trainer:
                 actions = self.agents.act(states, timestep=timestep)[0]
 
                 # TODO: make saving images it configurable
-                self.images.append(self.env.render()[0])
+                if self._save_video:
+                    self.images.append(self.env.render()[0])
 
                 # step the environments
                 next_states, rewards, terminated, truncated, infos = self.env.step(
@@ -194,9 +196,10 @@ class Trainer:
             prev_truncated = truncated
 
             if terminated[0] or truncated[0]:
-                output_filename = f"{self.output_folder}/output_{timestep}.mp4"
-                self.save_video(self.images, filename=output_filename, fps=30)
-                self.images.clear()
+                if self._save_video:
+                    output_filename = f"{self.output_folder}/output_{timestep}.mp4"
+                    self.save_video(self.images, filename=output_filename, fps=30)
+                    self.images.clear()
 
             # post-interaction
             self.agents.post_interaction(

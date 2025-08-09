@@ -248,8 +248,8 @@ class FrankaCubePickCamera(VecTask):
         background_opts = gymapi.AssetOptions()
         background_opts.fix_base_link = True
         background_opts.disable_gravity = True
-        asset_root_bg = "/home/romir/generalistmodel/robust-rearrangement/furniture-bench/furniture_bench/assets/"
-        asset_file_bg = "furniture/urdf/background_bc.urdf"
+        asset_root_bg = "./robust_rearrangement/furniture-bench/furniture_bench/assets"
+        asset_file_bg = "furniture/urdf/background.urdf" # TODO: change back to background_bc
         background_asset = self.gym.load_asset(self.sim, asset_root_bg, asset_file_bg, background_opts)
 
 

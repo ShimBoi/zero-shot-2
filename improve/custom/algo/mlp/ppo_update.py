@@ -48,12 +48,6 @@ def train(batch, state, model, optimizer, rng,
         (mu, sigma, value_pred) = model.apply(variables, obs)
         logp = gaussian_log_prob(mu, sigma, sampled_actions)
 
-        mu, sigma, value_pred = model.apply(variables, obs)
-        jax.debug.print("mu: {}", mu)
-        jax.debug.print("sigma: {}", sigma)
-        jax.debug.print("value_pred: {}", value_pred)
-        jax.debug.print("logp: {}", logp)
-
         def _policy_loss_fn(logp, sampled_log_prob, sampled_advantages):
             """Compute the policy loss."""
 
@@ -76,8 +70,6 @@ def train(batch, state, model, optimizer, rng,
 
         def _critic_loss_fn(value_pred, sampled_values, sampled_returns):
             """Compute the critic loss."""
-            value_pred = jnp.reshape(value_pred, (bs, -1))
-
             if clip_predicted_values:
                 value_pred = sampled_values + \
                     jnp.clip(value_pred - sampled_values, -
