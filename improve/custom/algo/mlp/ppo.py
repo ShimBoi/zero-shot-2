@@ -9,6 +9,7 @@ import optax
 import numpy as np
 from flax import linen as nn
 
+from tqdm import tqdm
 import functools as ft
 from skrl import config, logger
 from improve.custom.algo.base import Agent
@@ -73,7 +74,7 @@ PPO_DEFAULT_CONFIG = {
 
 
 # https://jax.readthedocs.io/en/latest/faq.html#strategy-1-jit-compiled-helper-function
-@jax.jit
+# @jax.jit
 def _compute_gae(
     rewards: jax.Array,
     dones: jax.Array,
@@ -86,7 +87,7 @@ def _compute_gae(
     advantages = jnp.zeros_like(rewards)
     not_dones = jnp.logical_not(dones)
     memory_size = rewards.shape[0]
-
+    
     # advantages computation
     for i in reversed(range(memory_size)):
         next_values = values[i + 1] if i < memory_size - 1 else next_values
@@ -208,23 +209,13 @@ class PPO(Agent):
         else:
             self._value_preprocessor = self._empty_preprocessor
 
-        # construct optimizers (actor masks out value head, critic only updates value head)
-
-        flat = flatten_dict(self.model.variables["params"], sep="/")
-        labels = {}
-        for path in flat:
-            if path.startswith("value_head"):
-                labels[path] = "critic"
-            else:
-                labels[path] = "actor"
-
-        label_tree = unflatten_dict(labels, sep="/")
-
-        self.optimizer = multi_transform(
-            {"actor": optax.adam(1e-4),
-             "critic": optax.adam(1e-3)},
-            param_labels=label_tree
-        )
+        if self._grad_norm_clip > 0:
+            self.optimizer = optax.chain(
+                optax.clip_by_global_norm(self._grad_norm_clip),
+                optax.adam(learning_rate=self._learning_rate)
+            )
+        else:
+            self.optimizer = optax.adam(learning_rate=self._learning_rate)
 
         agent_create_train_state = ft.partial(
             create_train_state,
@@ -406,6 +397,36 @@ class PPO(Agent):
         # write tracking data and checkpoints
         super().post_interaction(timestep, timesteps)
 
+    def calc_avg_reward(self, memory):
+        rewards = memory.get_tensor_by_name("returns")
+        terminated = memory.get_tensor_by_name("terminated")
+        truncated = memory.get_tensor_by_name("truncated")
+        
+        dones = np.logical_or(terminated, truncated)
+
+        n_envs = rewards.shape[1]
+
+        episode_return = [0.0 for _ in range(n_envs)]
+        completed_returns = []
+
+        for t in range(rewards.shape[0]):
+            for e in range(n_envs):
+                episode_return[e] += rewards[t, e]
+                if dones[t, e]:
+                    completed_returns.append(episode_return[e])
+                    episode_return[e] = 0.0
+
+        # Handle ongoing episodes at the end (optional)
+        for ret in episode_return:
+            if ret > 0:
+                completed_returns.append(ret)
+
+        if len(completed_returns) == 0:
+            return 0.0  # No completed episodes yet
+
+        average_return = sum(completed_returns) / len(completed_returns)
+        return average_return
+
     def _update(self, timestep: int, timesteps: int) -> None:
         rng = self.model.rng
 
@@ -427,12 +448,30 @@ class PPO(Agent):
         self.memory.set_tensor_by_name("returns", returns)
         self.memory.set_tensor_by_name("advantages", advantages)
 
-        ds = self.memory.sample_all(sequence_length=1,
-                                    names=self._tensors_names,
-                                    minibatches=self._mini_batches,
-                                    is_image_obs=False)
-        for batch in tfds.as_numpy(ds):
-            self.state, metrics_update = self.jitted_train_step(
-                state=self.state, batch=batch, rng=rng
-            )
-            print(metrics_update)
+        print(f"Observations (signs): {self.memory.get_tensor_by_name('states')}")
+        print(f"Actions: {self.memory.get_tensor_by_name('actions')}") 
+        print(f"Values: {values}")
+        print(f"Rewards: {self.memory.get_tensor_by_name('rewards')}")
+        print(f"Returns: {returns}")
+        print(f"Terminated: {self.memory.get_tensor_by_name('terminated')}")
+        # print(f"Average returns: {self.calc_avg_reward(self.memory)}")
+
+        pbar = tqdm(range(self._learning_epochs))
+        for epoch in pbar:
+            ds = self.memory.sample_all(sequence_length=1,
+                                        names=self._tensors_names,
+                                        minibatches=self._mini_batches,
+                                        is_image_obs=False)
+
+            for batch in tfds.as_numpy(ds):
+                self.state, metrics_update = self.jitted_train_step(
+                    state=self.state, batch=batch, rng=rng
+                )
+
+                pbar.set_postfix({
+                    'policy_loss':metrics_update['policy_loss'],
+                    'critic_loss': metrics_update['value_loss']
+                })
+
+        self.model.variables["params"] = self.state.params
+        self.optimizer = self.state.optimizer
