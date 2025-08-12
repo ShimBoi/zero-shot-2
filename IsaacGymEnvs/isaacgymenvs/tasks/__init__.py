@@ -26,7 +26,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from isaacgymenvs.tasks.franka_cube_pick_camera import FrankaCubePickCamera
 from .ant import Ant
 from .anymal import Anymal
 from .anymal_terrain import AnymalTerrain
@@ -39,6 +38,8 @@ from .factory.factory_task_nut_bolt_place import FactoryTaskNutBoltPlace
 from .factory.factory_task_nut_bolt_screw import FactoryTaskNutBoltScrew
 from .franka_cabinet import FrankaCabinet
 from .franka_cube_stack import FrankaCubeStack
+from .franka_cube_pick import FrankaCubePick
+from .franka_cube_pick_camera import FrankaCubePickCamera
 from .humanoid import Humanoid
 from .humanoid_amp import HumanoidAMP
 from .ingenuity import Ingenuity
@@ -105,6 +106,7 @@ isaacgym_task_map = {
     "IndustRealTaskPegsInsert": IndustRealTaskPegsInsert,
     "IndustRealTaskGearsInsert": IndustRealTaskGearsInsert,
     "FrankaCabinet": FrankaCabinet,
+    "FrankaCubePick": FrankaCubePick,
     "FrankaCubePickCamera": FrankaCubePickCamera,
     "FrankaCubeStack": FrankaCubeStack,
     "Humanoid": Humanoid,

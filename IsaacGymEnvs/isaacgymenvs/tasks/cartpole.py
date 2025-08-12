@@ -31,7 +31,7 @@ import os
 import torch
 
 from isaacgym import gymutil, gymtorch, gymapi
-from .base.vec_task import VecTask
+from .base.custom_vec_task import VecTask
 
 class Cartpole(VecTask):
 
@@ -45,6 +45,14 @@ class Cartpole(VecTask):
 
         self.cfg["env"]["numObservations"] = 4
         self.cfg["env"]["numActions"] = 1
+
+        # single camera for recording videos
+        self.enable_camera = self.cfg["env"].get("enableCameraSensors", False)
+        self.camera_width = self.cfg["env"].get("cameraWidth", 256)
+        self.camera_height = self.cfg["env"].get("cameraHeight", 256)
+        self.cameras = []                   # List of camera handles
+        self.camera_tensors = []            # List of camera tensors
+        self.camera_images = torch.zeros(self.camera_height, self.camera_width, 3)
 
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
 
@@ -66,6 +74,17 @@ class Cartpole(VecTask):
         # set the normal force to be z dimension
         plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0) if self.up_axis == 'z' else gymapi.Vec3(0.0, 1.0, 0.0)
         self.gym.add_ground(self.sim, plane_params)
+
+    def _create_camera(self, env, env_id):
+        camera_props = gymapi.CameraProperties()
+        camera_props.width = self.camera_width
+        camera_props.height = self.camera_height
+        camera_props.enable_tensors = True
+
+        camera_handle = self.gym.create_camera_sensor(env, camera_props)
+        self.gym.set_camera_location(camera_handle, env, gymapi.Vec3(3.5, 0.0, 4.0), gymapi.Vec3(0.0, 0.0, 2.0))
+        
+        return camera_handle
 
     def _create_envs(self, num_envs, spacing, num_per_row):
         # define plane on which environments are initialized
@@ -113,6 +132,10 @@ class Cartpole(VecTask):
             dof_props['damping'][:] = 0.0
             self.gym.set_actor_dof_properties(env_ptr, cartpole_handle, dof_props)
 
+            if i == 0 and self.enable_camera:
+                camera_handle = self._create_camera(env_ptr, i)
+                self.cameras.append(camera_handle)
+
             self.envs.append(env_ptr)
             self.cartpole_handles.append(cartpole_handle)
 
@@ -128,20 +151,41 @@ class Cartpole(VecTask):
             self.reset_dist, self.reset_buf, self.progress_buf, self.max_episode_length
         )
 
+    def capture_image(self, gym, sim, env_ptr, cam_handle):
+        cam_tensor = gym.get_camera_image_gpu_tensor(sim, env_ptr, cam_handle, gymapi.IMAGE_COLOR)
+        if cam_tensor is None:
+            raise RuntimeError("Failed to capture image")
+        
+        cam_tensor = gymtorch.wrap_tensor(cam_tensor)
+        return cam_tensor[:, :, :3]
+
     def compute_observations(self, env_ids=None):
         if env_ids is None:
             env_ids = np.arange(self.num_envs)
 
         self.gym.refresh_dof_state_tensor(self.sim)
 
+        if self.enable_camera:
+            self.gym.render_all_camera_sensors(self.sim)
+            self.gym.start_access_image_tensors(self.sim)
+            self.gym.simulate(self.sim)
+            self.gym.fetch_results(self.sim, True)
+            self.gym.step_graphics(self.sim)
+            self.gym.render_all_camera_sensors(self.sim)
+            self.gym.render_all_camera_sensors(self.sim)
+
         self.obs_buf[env_ids, 0] = self.dof_pos[env_ids, 0].squeeze()
         self.obs_buf[env_ids, 1] = self.dof_vel[env_ids, 0].squeeze()
         self.obs_buf[env_ids, 2] = self.dof_pos[env_ids, 1].squeeze()
         self.obs_buf[env_ids, 3] = self.dof_vel[env_ids, 1].squeeze()
 
+        self.camera_images = self.capture_image(self.gym, self.sim, self.envs[0], self.cameras[0])
+        
         return self.obs_buf
 
     def reset_idx(self, env_ids):
+        self.gym.set_camera_location(self.cameras[0], self.envs[0], gymapi.Vec3(3.5, 0.0, 4.0), gymapi.Vec3(0.0, 0.0, 2.0))
+
         positions = 0.2 * (torch.rand((len(env_ids), self.num_dof), device=self.device) - 0.5)
         velocities = 0.5 * (torch.rand((len(env_ids), self.num_dof), device=self.device) - 0.5)
 

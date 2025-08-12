@@ -7,6 +7,8 @@ from typing import Sequence, Callable
 
 
 def gaussian_log_prob(mu, sigma, actions):
+    sigma = jnp.maximum(sigma, 1e-8)
+    
     pre_sum = -0.5 * (((actions - mu) / sigma) ** 2 + 2 *
                       jnp.log(sigma) + jnp.log(2 * jnp.pi))
     return pre_sum.sum(axis=-1)
@@ -17,7 +19,7 @@ class MLPActorCritic(nn.Module):
     act_dim: int
     hidden_units: Sequence[int] = (256, 128, 64)
     activation: Callable = nn.elu
-    fixed_log_std: float = -1.0
+    fixed_log_std: float = 0.0
 
     @nn.compact
     def __call__(self, x):
@@ -26,6 +28,7 @@ class MLPActorCritic(nn.Module):
             x = self.activation(x)
 
         mu = nn.Dense(self.act_dim)(x)
+        mu = jnp.tanh(mu)
         v = nn.Dense(1)(x)
 
         log_std = self.param('log_std',

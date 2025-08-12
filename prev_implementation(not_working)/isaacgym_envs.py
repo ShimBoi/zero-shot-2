@@ -165,20 +165,6 @@ class IsaacGymPreview3Wrapper(Wrapper):
             pass
         return None
 
-    def _get_observation(self, observations):
-        """Get the observation from the environment"""
-        image = _torch2jax(flatten_tensorized_space(tensorize_space(
-            self.observation_space['image'], observations["image"])))
-        vector = _torch2jax(tensorize_space(
-            self.observation_space['vector'], observations["vector"]))
-        if getattr(self._env, "_use_camera_obs"):
-            return image
-        else:
-            return {
-                "vector": vector,
-                "image": image
-            }
-
     def step(self, actions: Union[np.ndarray, jax.Array]) -> Tuple[
         Union[np.ndarray, jax.Array],
         Union[np.ndarray, jax.Array],
@@ -197,11 +183,9 @@ class IsaacGymPreview3Wrapper(Wrapper):
         actions = _jax2torch(actions, self._env.device, self._jax)
 
         with torch.no_grad():
-            observations, reward, terminated, self._info = self._env.step(
+            self.observations, reward, terminated, self._info = self._env.step(
                 unflatten_tensorized_space(self.action_space, actions)
             )
-
-        self._observations = self._get_observation(observations) 
 
         terminated = terminated.to(dtype=torch.int8)
         truncated = (
@@ -224,8 +208,7 @@ class IsaacGymPreview3Wrapper(Wrapper):
         :rtype: np.ndarray or jax.Array and any other info
         """
         if self._reset_once:
-            observations = self._env.reset()
-            self._observations = self._get_observation(observations)
+            self._observations = self._env.reset()
             self._reset_once = False
         return self._observations, self._info
 

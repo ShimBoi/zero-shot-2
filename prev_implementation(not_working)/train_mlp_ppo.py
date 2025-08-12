@@ -1,18 +1,17 @@
 import os
+
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 import functools
-import flax.linen as nn
 import jax
-import jax.numpy as jnp
-import numpy as np
-import tensorflow_hub as hub
+import argparse
+import os
 
 # MUST import isaacgym before pytorch
 import isaacgym
 from improve.custom.algo.mlp.ppo import PPO, PPO_DEFAULT_CONFIG
 from improve.custom.env.env_wrapper import wrap_env
-from improve.custom.env.select_obs_wrapper import SelectObsWrapper
+from improve.custom.env.select_obs_wrapper import CustomIsaacGymEnvWrapper
 from improve.custom.memory.replay_buffer import ReplayBuffer
 from improve.custom.models.mlp import MLPActorCriticPolicy
 from improve.custom.trainers.sequential import SequentialTrainer
@@ -34,19 +33,13 @@ config.jax.backend = "jax"  # or "numpy"
 set_seed(42)
 
 cfg = PPO_DEFAULT_CONFIG.copy()
-cfg["num_envs"] = 2048 # 2048
-env = make_env(task_name="FrankaCubePickCamera",
+cfg["num_envs"] = 8192 # 2048
+env = make_env(task_name="FrankaCubePick",
                headless=True, num_envs=cfg["num_envs"])
 env = wrap_env(env, wrapper='isaacgym-preview4')
-env = SelectObsWrapper(env)
-
-### DEBUG ENV WRAPPERS
-# env = RandomObsOneRewardOneTimestepEnvWrapper(env)
-# env = TwoObsTwoRewardOneTimestepEnvWrapper(env)
-# env = TwoObsOneRewardTwoTimestepEnvWrapper(env)
-# env = OneObsTwoActionTwoRewardOneTimestepEnvWrapper(env)
-# env = TwoObsTwoActionTwoRewardOneTimestepEnvWrapper(env)
+env = CustomIsaacGymEnvWrapper(env)
 print(env.observation_space, env.action_space)
+
 
 cfg["observation_space"] = env.observation_space
 cfg["action_space"] = env.action_space
@@ -57,6 +50,7 @@ cfg["discount_factor"] = 0.99
 cfg["lambda"] = 0.95
 
 # for not have static lr (need Linear decay?)
+cfg["learning_rate_scheduler"] = "linear"
 cfg["learning_rate"] = 5e-4
 cfg["learning_epochs"] = 5
 
@@ -64,12 +58,25 @@ cfg["kl_threshold"] = 0.008
 
 cfg["entropy_loss_scale"] = 0.0
 
-cfg["rollouts"] = 128
-cfg["mini_batches"] = 4096
-cfg["learning_rate"] = 3e-5
+cfg["timesteps"] = 1600000
+cfg["rollouts"] = 32
+cfg["mini_batches"] = 16
 
 cfg["grad_norm_clip"] = 1
-cfg["value_loss_scale"] = 4
+cfg["value_loss_scale"] = 1
+
+cfg["time_limit_bootstrap"] = True
+cfg["clip_predicted_values"] = True
+cfg["value_clip"] = 0.2
+
+# cfg["state_preprocessor"] = RunningStandardScaler
+# cfg["state_preprocessor_kwargs"] = {"size": env.observation_space, "device": cfg["device"]}
+cfg["value_preprocessor"] = RunningStandardScaler
+cfg["value_preprocessor_kwargs"] = None
+
+cfg["experiment"]["write_interval"] = 100
+cfg["experiment"]["wandb"] = True
+cfg["save_video"] = True
 
 # TODO: implement value clip, grad norm, lr scheduler,
 
@@ -94,7 +101,7 @@ agent = \
         device=cfg["device"]
     )
 
-cfg_trainer = {"timesteps": 1600000,
-               "headless": False, "output_folder": "videos", "save_video": True}
+cfg_trainer = {"timesteps": cfg["timesteps"],
+               "headless": False, "output_folder": "videos", "save_video": cfg["save_video"]}
 trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 trainer.train()

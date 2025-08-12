@@ -400,6 +400,7 @@ class VecTask(Env):
         self.extras["time_outs"] = self.timeout_buf.to(self.rl_device)
 
         self.obs_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        self.obs_dict["image"] = self.camera_images
 
         # asymmetric actor-critic
         if self.num_states > 0:
@@ -430,6 +431,7 @@ class VecTask(Env):
             Observation dictionary
         """
         self.obs_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        self.obs_dict["image"] = self.camera_images
 
         # asymmetric actor-critic
         if self.num_states > 0:
@@ -447,6 +449,7 @@ class VecTask(Env):
             self.reset_idx(done_env_ids)
 
         self.obs_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        self.obs_dict["image"] = self.camera_images
 
         # asymmetric actor-critic
         if self.num_states > 0:

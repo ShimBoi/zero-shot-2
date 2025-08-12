@@ -6,6 +6,7 @@ import contextlib
 import sys
 import tqdm
 
+import jax.numpy as jnp
 import numpy as np
 from skrl import config, logger
 from skrl.agents.jax import Agent
@@ -145,36 +146,25 @@ class Trainer:
         assert self.num_simultaneous_agents == 1, "This method is not allowed for simultaneous agents"
         assert self.env.num_agents == 1, "This method is not allowed for multi-agents"
 
-        # initialize prev dones to track is_first
-        num_envs = self.env.num_envs
-        prev_terminated = np.ones(num_envs, dtype=bool)
-        prev_truncated = np.ones(num_envs, dtype=bool)
-
         # reset env
         states, infos = self.env.reset()
 
+        ep_reward = 0.0
         for timestep in tqdm.tqdm(
             range(self.initial_timestep, self.timesteps), disable=self.disable_progressbar, file=sys.stdout
         ):
-            is_first = np.logical_or(prev_terminated, prev_truncated)
 
             with contextlib.nullcontext():
                 # compute actions
-                actions = self.agents.act(states, timestep=timestep)[0]
+                actions = self.agents.act(states, timestep=timestep, timesteps=self.timesteps)[0]
 
                 # TODO: make saving images it configurable
                 if self._save_video:
                     self.images.append(self.env.render()[0])
 
                 # step the environments
-                next_states, rewards, terminated, truncated, infos = self.env.step(
-                    actions)
-
-            is_last = np.logical_or(terminated, truncated)
-
-            # render scene
-            # if not self.headless:
-                # self.env.render()
+                next_states, rewards, terminated, truncated, infos = self.env.step(actions)
+                ep_reward += rewards[0]
 
             # record the environments' transitions
             self.agents.record_transition(
@@ -184,22 +174,17 @@ class Trainer:
                 next_states=next_states,
                 terminated=terminated,
                 truncated=truncated,
-                is_first=is_first,
-                is_last=is_last,
                 infos=infos,
                 timestep=timestep,
                 timesteps=self.timesteps,
             )
 
-            # update for next iteration
-            prev_terminated = terminated
-            prev_truncated = truncated
-
             if terminated[0] or truncated[0]:
                 if self._save_video:
-                    output_filename = f"{self.output_folder}/output_{timestep}.mp4"
+                    output_filename = f"{self.output_folder}/output_{timestep}_reward_{ep_reward}.mp4"
                     self.save_video(self.images, filename=output_filename, fps=30)
                     self.images.clear()
+                    ep_reward = 0.0
 
             # post-interaction
             self.agents.post_interaction(

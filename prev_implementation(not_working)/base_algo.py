@@ -158,11 +158,11 @@ class Agent:
         # setup Weights & Biases
         if self.cfg.get("experiment", {}).get("wandb", False):
             # save experiment configuration
-            try:
-                models_cfg = {k: v.net._modules for (
-                    k, v) in self.models.items()}
-            except AttributeError:
-                models_cfg = {k: v._modules for (k, v) in self.models.items()}
+            # try:
+            #     models_cfg = {k: v.net._modules for (
+            #         k, v) in self.models.items()}
+            # except AttributeError:
+            #     models_cfg = {k: v._modules for (k, v) in self.models.items()}
             wandb_config = {**self.cfg, **trainer_cfg}  # , **models_cfg}
             # set default values
             wandb_kwargs = copy.deepcopy(self.cfg.get(
@@ -283,42 +283,54 @@ class Agent:
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
-        tag = str(timestep if timestep is not None else datetime.datetime.now(
-        ).strftime("%y-%m-%d_%H-%M-%S-%f"))
-        # separated modules
-        if self.checkpoint_store_separately:
-            for name, module in self.checkpoint_modules.items():
-                with open(os.path.join(self.experiment_dir, "checkpoints", f"{name}_{tag}.pickle"), "wb") as file:
-                    pickle.dump(flax.serialization.to_bytes(
-                        self._get_internal_value(module)), file, protocol=4)
-        # whole agent
-        else:
-            modules = {}
-            for name, module in self.checkpoint_modules.items():
-                modules[name] = flax.serialization.to_bytes(
-                    self._get_internal_value(module))
+        import os
+        import pickle
+        import flax.serialization
+        
+        tag = str(timestep)
+        checkpoint_dir = os.path.join(self.experiment_dir, "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        checkpoint_path = os.path.join(checkpoint_dir, f"variables_{tag}.pickle")
+        with open(checkpoint_path, "wb") as file:
+            pickle.dump(flax.serialization.to_bytes(self.model.variables), file, protocol=4)
+            
+        # tag = str(timestep if timestep is not None else datetime.datetime.now(
+        # ).strftime("%y-%m-%d_%H-%M-%S-%f"))
+        # # separated modules
+        # if self.checkpoint_store_separately:
+        #     for name, module in self.checkpoint_modules.items():
+        #         with open(os.path.join(self.experiment_dir, "checkpoints", f"{name}_{tag}.pickle"), "wb") as file:
+        #             pickle.dump(flax.serialization.to_bytes(
+        #                 self._get_internal_value(module)), file, protocol=4)
+        # # whole agent
+        # else:
+        #     modules = {}
+        #     for name, module in self.checkpoint_modules.items():
+        #         modules[name] = flax.serialization.to_bytes(
+        #             self._get_internal_value(module))
 
-            with open(os.path.join(self.experiment_dir, "checkpoints", f"agent_{tag}.pickle"), "wb") as file:
-                pickle.dump(modules, file, protocol=4)
+        #     with open(os.path.join(self.experiment_dir, "checkpoints", f"agent_{tag}.pickle"), "wb") as file:
+        #         pickle.dump(modules, file, protocol=4)
 
-        # best modules
-        if self.checkpoint_best_modules["modules"] and not self.checkpoint_best_modules["saved"]:
-            # separated modules
-            if self.checkpoint_store_separately:
-                for name, module in self.checkpoint_modules.items():
-                    with open(os.path.join(self.experiment_dir, "checkpoints", f"best_{name}.pickle"), "wb") as file:
-                        pickle.dump(
-                            flax.serialization.to_bytes(self.checkpoint_best_modules["modules"][name]), file, protocol=4
-                        )
-            # whole agent
-            else:
-                modules = {}
-                for name, module in self.checkpoint_modules.items():
-                    modules[name] = flax.serialization.to_bytes(
-                        self.checkpoint_best_modules["modules"][name])
-                with open(os.path.join(self.experiment_dir, "checkpoints", "best_agent.pickle"), "wb") as file:
-                    pickle.dump(modules, file, protocol=4)
-            self.checkpoint_best_modules["saved"] = True
+        # # best modules
+        # if self.checkpoint_best_modules["modules"] and not self.checkpoint_best_modules["saved"]:
+        #     # separated modules
+        #     if self.checkpoint_store_separately:
+        #         for name, module in self.checkpoint_modules.items():
+        #             with open(os.path.join(self.experiment_dir, "checkpoints", f"best_{name}.pickle"), "wb") as file:
+        #                 pickle.dump(
+        #                     flax.serialization.to_bytes(self.checkpoint_best_modules["modules"][name]), file, protocol=4
+        #                 )
+        #     # whole agent
+        #     else:
+        #         modules = {}
+        #         for name, module in self.checkpoint_modules.items():
+        #             modules[name] = flax.serialization.to_bytes(
+        #                 self.checkpoint_best_modules["modules"][name])
+        #         with open(os.path.join(self.experiment_dir, "checkpoints", "best_agent.pickle"), "wb") as file:
+        #             pickle.dump(modules, file, protocol=4)
+        #     self.checkpoint_best_modules["saved"] = True
 
     def act(self, states: Union[np.ndarray, jax.Array], timestep: int, timesteps: int) -> Union[np.ndarray, jax.Array]:
         """Process the environment's states to make a decision (actions) using the main policy

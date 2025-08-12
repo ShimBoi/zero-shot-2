@@ -66,7 +66,7 @@ def train(batch, state, model, optimizer, rng,
                                 role="policy").mean()
 
             return -jnp.minimum(surrogate, surrogate_clipped).mean(), \
-                (kl_divergence, entropy_loss)
+                (kl_divergence, entropy_loss, ratio)
 
         def _critic_loss_fn(value_pred, sampled_values, sampled_returns):
             """Compute the critic loss."""
@@ -76,7 +76,7 @@ def train(batch, state, model, optimizer, rng,
                              value_clip, value_clip)
             return value_loss_scale * ((sampled_returns - value_pred) ** 2).mean()
 
-        p_loss, (kl_div, entropy_loss) = _policy_loss_fn(
+        p_loss, (kl_div, entropy_loss, ratio) = _policy_loss_fn(
             logp, sampled_log_prob, sampled_advantages)
         v_loss = _critic_loss_fn(value_pred, sampled_values, sampled_returns)
 
@@ -87,6 +87,9 @@ def train(batch, state, model, optimizer, rng,
             "v_loss": v_loss,
             "entropy_loss": entropy_loss,
             "kl_divergence": kl_div,
+            "stddev": sigma.mean(),
+            "ratio": ratio,
+            "logp": logp
         }
 
         return total_loss, aux
@@ -111,6 +114,9 @@ def train(batch, state, model, optimizer, rng,
         "value_loss":   aux["v_loss"],
         "entropy_loss": aux["entropy_loss"],
         "kl_divergence": aux["kl_divergence"],
+        "stddev": aux["stddev"],
+        "ratio": aux["ratio"],
+        "logp": aux["logp"],
     }
 
     return new_state, metrics
