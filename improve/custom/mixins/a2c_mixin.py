@@ -120,7 +120,6 @@ class A2CMixin:
         ### CUSTOM ARGS
         self._role = role
         self._jitted_apply = jax.jit(self.forward, static_argnames=("role"))
-        self._value = None
 
         # Important for Flax
         flax.linen.Module.__post_init__(self)
@@ -178,7 +177,7 @@ class A2CMixin:
         actions, log_prob, outputs = self._jitted_apply(params, inputs, role)
 
         if self._d_clip_values:
-            values = jnp.clip(self._value, a_min=self._d_clip_values_min, a_max=self._d_clip_values_max)
+            values = jnp.clip(outputs["values"], a_min=self._d_clip_values_min, a_max=self._d_clip_values_max)
             outputs["values"] = values
 
         return actions, log_prob, outputs

@@ -1,4 +1,4 @@
-from improve.custom.env.isaacgym_envs import _torch2jax
+from skrl.envs.wrappers.jax.isaacgym_envs import _torch2jax
 import jax.numpy as jnp
 from skrl.utils.spaces.torch import tensorize_space
 

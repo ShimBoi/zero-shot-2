@@ -177,10 +177,10 @@ def _update_all(
                 jnp.clip(ratio, 1.0 - ratio_clip, 1.0 + ratio_clip)
 
             entropy_loss = 0
-            if entropy_loss_scale:
-                entropy_loss = -entropy_loss_scale * \
-                    get_entropy(jnp.zeros((bs, 1), dtype=jnp.float32),
-                                role="policy").mean()
+            # if entropy_loss_scale:
+                # entropy_loss = -entropy_loss_scale * \
+                #     get_entropy(jnp.zeros((bs, 1), dtype=jnp.float32),
+                #                 role="policy").mean()
                 
             return -jnp.minimum(surrogate, surrogate_clipped).mean(), (entropy_loss, kl_divergence, outputs["stddev"])
         
