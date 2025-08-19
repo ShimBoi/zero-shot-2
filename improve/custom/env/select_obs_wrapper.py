@@ -1,6 +1,7 @@
 from skrl.envs.wrappers.jax.isaacgym_envs import _torch2jax
 import jax.numpy as jnp
 from skrl.utils.spaces.torch import tensorize_space
+from skrl.utils.spaces.torch.spaces import flatten_tensorized_space
 
 IMAGE_SHAPE = (256, 256, 3)
 
@@ -68,18 +69,19 @@ class SelectObsWrapper:
         return getattr(self._env, name)
 
 class CustomIsaacGymEnvWrapper:
-    def __init__(self, env):
+    def __init__(self, env, image_shape=IMAGE_SHAPE):
         self._env = env
         self._raw_obs = None
+        self.image_shape = image_shape
 
     def _get_observation(self, observations):
         """Get the observation from the environment"""
         if "image" in observations:
             image = observations["image"].cpu().numpy()
         else:
-            image = jnp.zeros((1, *IMAGE_SHAPE), dtype=jnp.float32)
+            image = jnp.zeros((1, *self.image_shape), dtype=jnp.float32)
 
-        obs = _torch2jax(tensorize_space(self.observation_space, observations["obs"]))
+        obs = _torch2jax(flatten_tensorized_space(tensorize_space(self.observation_space, observations["obs"])))
         
         return {
             "obs": obs,
@@ -104,7 +106,7 @@ class CustomIsaacGymEnvWrapper:
         return selected_obs, reward, terminated, truncated, info
 
     def render(self):
-        return self._raw_obs.reshape(-1, *IMAGE_SHAPE)
+        return self._raw_obs.reshape(-1, *self.image_shape)
 
     def __getattr__(self, name):
         return getattr(self._env, name)

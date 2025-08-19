@@ -142,7 +142,7 @@ def _compute_gae(
 
     return returns, advantages
 
-# @functools.partial(jax.jit, static_argnames=("model_act", "get_entropy", "entropy_loss_scale", "clip_predicted_values"))
+@functools.partial(jax.jit, static_argnames=("model_act", "get_entropy", "entropy_loss_scale", "clip_predicted_values"))
 def _update_all(
     model_act,
     model_state_dict,
@@ -199,6 +199,8 @@ def _update_all(
             "entropy_loss": entropy_loss,
             "kl_divergence": kl_divergence,
             "stddev": outputs["stddev"],
+            "batch_stats": outputs["batch_stats"],
+            "rng": outputs["rng"],
         }
         return total_loss, aux
     
@@ -209,7 +211,9 @@ def _update_all(
     entropy_loss = aux["entropy_loss"]
     kl_divergence = aux["kl_divergence"]
     stddev = aux["stddev"]
-    return grad, p_loss, v_loss, entropy_loss, kl_divergence, stddev
+    batch_stats = aux["batch_stats"]
+    rng = aux["rng"]
+    return grad, p_loss, v_loss, entropy_loss, kl_divergence, stddev, batch_stats, rng
 
 class PPO(Agent):
     def __init__(
@@ -545,18 +549,18 @@ class PPO(Agent):
 
         # mini-batches loop
         for batch in ds:
-            sampled_states = batch["states"]
-            sampled_actions = batch["actions"]
-            sampled_log_prob = batch["log_prob"]
-            sampled_values = batch["values"]
-            sampled_returns = batch["returns"]
-            sampled_advantages = batch["advantages"]
+            sampled_states = jax.lax.stop_gradient(batch["states"])
+            sampled_actions = jax.lax.stop_gradient(batch["actions"])
+            sampled_log_prob = jax.lax.stop_gradient(batch["log_prob"])
+            sampled_values = jax.lax.stop_gradient(batch["values"])
+            sampled_returns =jax.lax.stop_gradient(batch["returns"])
+            sampled_advantages = jax.lax.stop_gradient(batch["advantages"])
 
             sampled_states = self._state_preprocessor(sampled_states, train=True)
 
             import time
             start_time = time.time()
-            grads, policy_loss, value_loss, entropy_loss, kl_divergence, stddev = _update_all(
+            grads, policy_loss, value_loss, entropy_loss, kl_divergence, stddev, batch_stats, rng = _update_all(
                 model_act=self.model.act,
                 model_state_dict=self.model.state_dict,
                 sampled_states=sampled_states,
@@ -574,6 +578,10 @@ class PPO(Agent):
             )
             elapsed_time = time.time() - start_time
             print(f"Update step took {elapsed_time:.4f} seconds")
+
+            # update model batch stats and rng
+            self.model.batch_stats = batch_stats
+            self.model.rng = rng
 
             kl_divergences.append(kl_divergence.item())
 

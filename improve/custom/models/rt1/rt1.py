@@ -278,11 +278,12 @@ class RT1(RTXMixin, Model):
     include_prev_timesteps_actions: bool = False
     sow_intermediates: bool = False
     
-    def __init__(self, observation_space, action_space, device, 
-                 seqlen=15, num_layers=8, layer_size=128, num_heads=8, 
+    def __init__(self, observation_space, action_space, device, task="",
+                 clip_actions=True, clip_values=False, reduction="sum", act_tokens=None,
+                 seqlen=15, num_layers=8, layer_size=256, num_heads=8, 
                  feed_forward_hidden_size=512, feed_forward_output_size=512,
-                 ffn_option=FFNOptions.SWIGLU, dropout_rate=0.1, vocab_size=256, 
-                 num_image_tokens=8, num_action_tokens=11, image_num_features=512, 
+                 ffn_option=FFNOptions.SWIGLU, dropout_rate=0.1, vocab_size=512, 
+                 num_image_tokens=81, num_action_tokens=11, image_num_features=512, 
                  world_vector_range=(-1.0, 1.0), use_token_learner=True, 
                  include_prev_timesteps_actions=False, sow_intermediates=False, **kwargs):
         
@@ -296,21 +297,24 @@ class RT1(RTXMixin, Model):
         RT1.ffn_option = ffn_option
         RT1.dropout_rate = dropout_rate
         RT1.vocab_size = vocab_size
-        RT1.num_image_tokens = num_image_tokens  # This will now be 81!
+        RT1.num_image_tokens = num_image_tokens
         RT1.num_action_tokens = num_action_tokens
         RT1.image_num_features = image_num_features
         RT1.world_vector_range = world_vector_range
         RT1.use_token_learner = use_token_learner
         RT1.include_prev_timesteps_actions = include_prev_timesteps_actions
         RT1.sow_intermediates = sow_intermediates
-
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.device = device
-        self.act_tokens = jnp.zeros((1, 6, num_action_tokens))
+        RT1.task = task
+        RT1.clip_actions = clip_actions
+        RT1.clip_values = clip_values
+        RT1.reduction = reduction
+        RT1.observation_space = observation_space
+        RT1.action_space = action_space
+        RT1.device = device
+        RT1.act_tokens = act_tokens if act_tokens is not None else jnp.zeros((1, seqlen, num_action_tokens))
 
         Model.__init__(self, observation_space, action_space, device, **kwargs)
-        RTXMixin.__init__(self, clip_actions=False)
+        RTXMixin.__init__(self, task=task, clip_actions=clip_actions, clip_values=clip_values, reduction=reduction)
 
     def setup(self):
         self.image_tokenizer = ImageTokenizer(
@@ -351,9 +355,9 @@ class RT1(RTXMixin, Model):
             image = obs['image']
             lang = obs['natural_language_embedding']
             lang = jnp.reshape(lang, [bs * seqlen, -1])
-            context_image_tokens = self.image_tokenizer(
+            context_image_tokens = jax.lax.stop_gradient(self.image_tokenizer(
                 image=image, context_input=lang, train=train
-            )
+            ))
         else:
             context_image_tokens = obs_tokens
 
@@ -509,68 +513,6 @@ class RT1(RTXMixin, Model):
                         mask = 1
                 action_mask[i, j] = mask
         return default_attn_mask - action_mask
-    
-    def init_state_dict(
-        self, 
-        role: str, 
-        inputs: Mapping[str, Union[np.ndarray, jax.Array]] = {}, 
-        key: Optional[jax.Array] = None,
-        ckpt: Optional[str] = None
-    ) -> None:
-        """Initialize state dictionary
-
-        :param role: Role play by the model
-        :type role: str
-        :param inputs: Model inputs. The most common keys are:
-
-                        - ``"states"``: state of the environment used to make the decision
-                        - ``"taken_actions"``: actions taken by the policy for the given states
-
-                       If not specified, the keys will be populated with observation and action space samples
-        :type inputs: dict of np.ndarray or jax.Array, optional
-        :param key: Pseudo-random number generator (PRNG) key (default: ``None``).
-                    If not provided, the skrl's PRNG key (``config.jax.key``) will be used
-        :type key: jax.Array, optional
-        """
-        if ckpt:
-            raise NotImplementedError("Loading from checkpoint is not implemented yet.")
-        
-        from flax.training import checkpoints
-        checkpoint_path = "improve/custom/models/rt1/rtx_ckpt/"
-        state_dict = checkpoints.restore_checkpoint(checkpoint_path, None)
-
-        obs = {
-            "image": jnp.ones((1, 15, 300, 300, 3)),
-            "natural_language_embedding": jnp.ones((1, 15, 512)),
-        }
-
-        if key is None:
-            key = config.jax.key
-
-        rngs = {
-            "params": key, 
-            "random": key
-        }
-
-        variables = self.init(
-            rngs=rngs,
-            obs=obs,
-            act=None,
-            act_tokens=self.act_tokens,
-            train=False
-        )
-
-        self.batch_stats = state_dict['batch_stats']
-        params = variables['params']
-
-        # replace parts of the params with the checkpoint params
-        for module_name, module_params in state_dict['params'].items():
-            if module_name in params:
-                params[module_name] = module_params
-
-        # init internal state dict
-        with jax.default_device(self.device):
-            self.state_dict = StateDict.create(apply_fn=self.apply, params={"params": params})
 
 if __name__ == "__main__":
     device = "cuda" if jax.devices("gpu") else "cpu"
@@ -596,7 +538,7 @@ if __name__ == "__main__":
 
     print("Action:", action, action.shape)
     print("Log Probability:", logp, logp.shape)
-    print("Output:", output)
+    # print("Output:", output)
 
     # obs = {
     #     "image": jnp.ones((1, 15, 300, 300, 3)),

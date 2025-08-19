@@ -156,7 +156,7 @@ class Trainer:
 
             with contextlib.nullcontext():
                 # compute actions
-                actions = self.agents.act(states, timestep=timestep, timesteps=self.timesteps)[0]
+                actions, _, outputs = self.agents.act(states, timestep=timestep, timesteps=self.timesteps)
 
                 # TODO: make saving images it configurable
                 if self._save_video:
@@ -170,6 +170,7 @@ class Trainer:
             self.agents.record_transition(
                 states=states,
                 actions=actions,
+                values=outputs["values"],
                 rewards=rewards,
                 next_states=next_states,
                 terminated=terminated,

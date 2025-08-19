@@ -29,15 +29,15 @@
 import numpy as np
 import os
 import torch
-from scipy.spatial.transform import Rotation as R
+import PIL
+
+from skrl.utils import isaacgym_utils
 
 from isaacgym import gymtorch
 from isaacgym import gymapi
 
 from isaacgymenvs.utils.torch_jit_utils import quat_mul, to_torch, tensor_clamp  
-from isaacgymenvs.tasks.base.vec_task import VecTask
-
-from PIL import Image
+from isaacgymenvs.tasks.base.franka_cube_pick_camera_vec_task import VecTask
 
 
 @torch.jit.script
@@ -79,6 +79,9 @@ class FrankaCubePickCamera(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
         self.cfg = cfg
+        self.done = 0
+
+        # self.webViewer = isaacgym_utils.WebViewer()
 
         self.max_episode_length = self.cfg["env"]["episodeLength"]
 
@@ -89,14 +92,12 @@ class FrankaCubePickCamera(VecTask):
         self.franka_rotation_noise = self.cfg["env"]["frankaRotationNoise"]
         self.franka_dof_noise = self.cfg["env"]["frankaDofNoise"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
-        self._use_camera_obs = self.cfg["env"].get("useCameraSensors", False)
 
         # Create dicts to pass to reward function
         self.reward_settings = {
             "r_dist_scale": self.cfg["env"]["distRewardScale"],
             "r_lift_scale": self.cfg["env"]["liftRewardScale"],
-            # "r_align_scale": self.cfg["env"]["alignRewardScale"],
-            # "r_stack_scale": self.cfg["env"]["stackRewardScale"],
+            "r_grip_scale": self.cfg["env"]["gripRewardScale"],
         }
 
         # Controller type
@@ -105,23 +106,13 @@ class FrankaCubePickCamera(VecTask):
             "Invalid control type specified. Must be one of: {osc, joint_tor}"
 
         # dimensions
-        # obs include: cubeA_pose (7) + eef_pose (7) + q_gripper (2)
-        self.height = 256
-        self.width = 256
-
-        self.timestep = 0 # frame number more or less
-        
-        obs_size_dict = {}
-        obs_size_dict["image"] = (self.height, self.width, 3)
-
-        # obs include: eef_pose (7) + q_gripper (2) + actions (7)
-        obs_size_dict["vector"] = 16
-        self.cfg["env"]["numObservations"] = obs_size_dict
-
+        # obs include: 256 pixels by 256 pixels by 3 RGB values
+        self.height = 128
+        self.width = 128
+        self.number = 0 # frame number more or less
+        self.cfg["env"]["numObservations"] = (self.height,self.width,3)
         # actions include: delta EEF if OSC (6) or joint torques (7) + bool gripper (1)
         self.cfg["env"]["numActions"] = 7 if self.control_type == "osc" else 8
-        self.randomize = self.cfg["task"]["randomize"]
-        self.randomization_params = self.cfg["task"]["randomization_params"]
 
         # Values to be filled in at runtime
         self.states = {}                        # will be dict filled with relevant states to use for reward calculation
@@ -156,8 +147,9 @@ class FrankaCubePickCamera(VecTask):
         self.up_axis = "z"
         self.up_axis_idx = 2
 
+        self.camera_images = torch.zeros(self.height, self.width, 3)
+
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
-        
 
         # Franka defaults
         self.franka_default_dof_pos = to_torch(
@@ -190,14 +182,6 @@ class FrankaCubePickCamera(VecTask):
             self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
         self._create_ground_plane()
         self._create_envs(self.num_envs, self.cfg["env"]['envSpacing'], int(np.sqrt(self.num_envs)))
-
-        if self.randomize:
-            self.loaded_texture_handle_list = []
-            self.apply_randomizations(self.randomization_params)
-            l_color = gymapi.Vec3(np.random.uniform(1, 1), np.random.uniform(1, 1), np.random.uniform(1, 1))
-            l_ambient = gymapi.Vec3(np.random.uniform(0.3, 0.7), np.random.uniform(0.3, 0.7), np.random.uniform(0.3, 0.7))
-            l_direction = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_light_parameters(self.sim, 0, l_color, l_ambient, l_direction)
 
     def _create_ground_plane(self):
         plane_params = gymapi.PlaneParams()
@@ -234,7 +218,8 @@ class FrankaCubePickCamera(VecTask):
         table_thickness = 0.05
         table_opts = gymapi.AssetOptions()
         table_opts.fix_base_link = True
-        table_asset = self.gym.create_box(self.sim, *[2, 2, table_thickness], table_opts)
+        table_asset = self.gym.create_box(self.sim, *[1.2, 1.2, table_thickness], table_opts)
+        table_color = gymapi.Vec3(0.1, 0.1, 0.1)
 
         # Create table stand asset
         table_stand_height = 0.1
@@ -242,15 +227,6 @@ class FrankaCubePickCamera(VecTask):
         table_stand_opts = gymapi.AssetOptions()
         table_stand_opts.fix_base_link = True
         table_stand_asset = self.gym.create_box(self.sim, *[0.2, 0.2, table_stand_height], table_opts)
-
-        background_asset_pos = [-1.4, 0, 1]
-        background_opts = gymapi.AssetOptions()
-        background_opts.fix_base_link = True
-        background_opts.disable_gravity = True
-        asset_root_bg = "./robust_rearrangement/furniture-bench/furniture_bench/assets"
-        asset_file_bg = "furniture/urdf/background.urdf" # TODO: change back to background_bc
-        background_asset = self.gym.load_asset(self.sim, asset_root_bg, asset_file_bg, background_opts)
-
 
         self.cubeA_size = 0.050
 
@@ -310,23 +286,19 @@ class FrankaCubePickCamera(VecTask):
         cubeA_start_pose.p = gymapi.Vec3(-1.0, 0.0, 0.0)
         cubeA_start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
 
-        background_start_pose = gymapi.Transform() 
-        background_start_pose.p = gymapi.Vec3(*background_asset_pos)
-        background_start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
-
-
         # compute aggregate size
         num_franka_bodies = self.gym.get_asset_rigid_body_count(franka_asset)
         num_franka_shapes = self.gym.get_asset_rigid_shape_count(franka_asset)
-        max_agg_bodies = num_franka_bodies + 4     # 1 for table, table stand, cubeA
-        max_agg_shapes = num_franka_shapes + 4     # 1 for table, table stand, cubeA
+        max_agg_bodies = num_franka_bodies + 3     # 1 for table, table stand, cubeA
+        max_agg_shapes = num_franka_shapes + 3     # 1 for table, table stand, cubeA
 
         self.frankas = []
-        self.cam_handles = []
         self.envs = []
+        self.cam_handles = []
+        self.side_handles = []
 
         # Create environments
-        for i in range(self.num_envs):
+        for i in range(num_envs):
             # create env instance
             env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row)
 
@@ -346,7 +318,6 @@ class FrankaCubePickCamera(VecTask):
                 rand_rot[:, -1] = self.franka_rotation_noise * (-1. + np.random.rand() * 2.0)
                 new_quat = axisangle2quat(rand_rot).squeeze().numpy().tolist()
                 franka_start_pose.r = gymapi.Quat(*new_quat)
-                
             franka_actor = self.gym.create_actor(env_ptr, franka_asset, franka_start_pose, "franka", i, 0, 0)
             self.gym.set_actor_dof_properties(env_ptr, franka_actor, franka_dof_props)
 
@@ -357,13 +328,11 @@ class FrankaCubePickCamera(VecTask):
             table_actor = self.gym.create_actor(env_ptr, table_asset, table_start_pose, "table", i, 1, 0)
             table_stand_actor = self.gym.create_actor(env_ptr, table_stand_asset, table_stand_start_pose, "table_stand",
                                                       i, 1, 0)
+            self.gym.set_rigid_body_color(env_ptr, table_actor, 0, gymapi.MESH_VISUAL, table_color)
+            self.gym.set_rigid_body_color(env_ptr, table_stand_actor, 0, gymapi.MESH_VISUAL, table_color)
 
             if self.aggregate_mode == 1:
                 self.gym.begin_aggregate(env_ptr, max_agg_bodies, max_agg_shapes, True)
-
-
-            self._background_id = self.gym.create_actor(env_ptr, background_asset, background_start_pose, "background", i, 1, 0)
-            self.gym.set_rigid_body_color(env_ptr, self._background_id, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.5, 0.5, 0.5))
 
             # Create cubes
             self._cubeA_id = self.gym.create_actor(env_ptr, cubeA_asset, cubeA_start_pose, "cubeA", i, 2, 0)
@@ -372,18 +341,34 @@ class FrankaCubePickCamera(VecTask):
 
             if self.aggregate_mode > 0:
                 self.gym.end_aggregate(env_ptr)
-
+                
             camera_props = gymapi.CameraProperties()
             camera_props.width = self.width  # Desired width
             camera_props.height = self.height  # Desired height
             camera_props.enable_tensors = True
             cam_handle = self.gym.create_camera_sensor(env_ptr, camera_props)
             self.cam_handles.append(cam_handle)
-            self.gym.set_camera_location(cam_handle, env_ptr, gymapi.Vec3(0.45, 0, 1), gymapi.Vec3(-0.45, 0, 0.5))  # Adjust location
-
-            # Store the created env pointers
+            self.gym.set_camera_location(cam_handle, env_ptr, gymapi.Vec3(1, 0, 1.5), gymapi.Vec3(0.5, 0, 1.5))  # Adjust location
+            # side_handle = self.gym.create_camera_sensor(env_ptr, camera_props)
+            # self.side_handles.append(side_handle)
+            # self.gym.set_camera_location(side_handle, env_ptr, gymapi.Vec3(0,0.5,1.25), gymapi.Vec3(0,-0.5,1.25))
+            
+            # cam_handle = self.gym.create_camera_sensor(env_ptr, camera_props)
+            # self.cam_handles.append(cam_handle)
+            # camera_offset = gymapi.Vec3(-1, 0, -1+0.5*i)
+            # camera_rotation = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, -1, 0), np.deg2rad(0))
+            # if i == 1:
+            #     count = self.gym.get_actor_count(env_ptr)
+            #     print(count, " IS ACTOR COUNT")
+            #     for ii in range(count):
+            #         print(self.gym.get_actor_name(env_ptr, ii), " IS ACTOR NAME")
+            # actor_handle = self.gym.get_actor_handle(env_ptr, 0)
+            # body_handle = self.gym.get_actor_rigid_body_handle(env_ptr, actor_handle, 0)
+            # self.gym.attach_camera_to_body(cam_handle, env_ptr, body_handle, gymapi.Transform(camera_offset, camera_rotation), gymapi.FOLLOW_TRANSFORM)
             self.envs.append(env_ptr)
             self.frankas.append(franka_actor)
+            
+        # self.webViewer.setup(self.gym, self.sim, self.envs, self.cam_handles+self.side_handles)    
 
         # Setup init state buffer
         self._init_cubeA_state = torch.zeros(self.num_envs, 13, device=self.device)
@@ -400,6 +385,8 @@ class FrankaCubePickCamera(VecTask):
             "hand": self.gym.find_actor_rigid_body_handle(env_ptr, franka_handle, "panda_hand"),
             "leftfinger_tip": self.gym.find_actor_rigid_body_handle(env_ptr, franka_handle, "panda_leftfinger_tip"),
             "rightfinger_tip": self.gym.find_actor_rigid_body_handle(env_ptr, franka_handle, "panda_rightfinger_tip"),
+            "leftfinger": self.gym.find_actor_rigid_body_handle(env_ptr, franka_handle, "panda_leftfinger"),
+            "rightfinger": self.gym.find_actor_rigid_body_handle(env_ptr, franka_handle, "panda_rightfinger"),
             "grip_site": self.gym.find_actor_rigid_body_handle(env_ptr, franka_handle, "panda_grip_site"),
             # Cubes
             "cubeA_body_handle": self.gym.find_actor_rigid_body_handle(self.envs[0], self._cubeA_id, "box"),
@@ -443,8 +430,16 @@ class FrankaCubePickCamera(VecTask):
         self._gripper_control = self._pos_control[:, 7:9]
 
         # Initialize indices
-        self._global_indices = torch.arange(self.num_envs * 5, dtype=torch.int32,
+        self._global_indices = torch.arange(self.num_envs * 4, dtype=torch.int32,
                                            device=self.device).view(self.num_envs, -1)
+
+
+    def capture_image(self, gym, sim, env_ptr, cam_handle):
+        cam_tensor = gym.get_camera_image_gpu_tensor(sim, env_ptr, cam_handle, gymapi.IMAGE_COLOR)
+        if cam_tensor is None:
+            raise RuntimeError("Failed to capture image")
+        
+        return gymtorch.wrap_tensor(cam_tensor)[:, :, :3]
 
     def _update_states(self):
         self.states.update({
@@ -461,7 +456,7 @@ class FrankaCubePickCamera(VecTask):
             # Cubes
             "cubeA_quat": self._cubeA_state[:, 3:7],
             "cubeA_pos": self._cubeA_state[:, :3],
-            "cubeA_pos_relative": self._cubeA_state[:, :3] - self._eef_state[:, :3]
+            "cubeA_pos_relative": self._cubeA_state[:, :3] - self._eef_state[:, :3],
         })
 
     def _refresh(self):
@@ -475,21 +470,38 @@ class FrankaCubePickCamera(VecTask):
         self._update_states()
 
     def compute_reward(self, actions):
-        self._update_states()
-        self.rew_buf[:], self.reset_buf[:] = compute_franka_reward(
-            self.reset_buf, self.progress_buf, self.actions, self.states, self.reward_settings, self.max_episode_length
-        )
-
-    def capture_image(self, gym, sim, env_ptr, cam_handle):
-        cam_tensor = gym.get_camera_image_gpu_tensor(sim, env_ptr, cam_handle, gymapi.IMAGE_COLOR)
-        if cam_tensor is None:
-            raise RuntimeError("Failed to capture image")
+        contact_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)
+        contact_forces = gymtorch.wrap_tensor(contact_tensor).view(self.num_envs, -1, 3)
+        # num_actors = self.gym.get_actor_count(self.envs[0])  # Get number of actors in the environment
         
-        return gymtorch.wrap_tensor(cam_tensor)
+        # for j in range(num_actors):
+        #     actor_handle = self.gym.get_actor_handle(self.envs[0], j)  # Get actor handle
+        #     rigid_body_names = self.gym.get_actor_rigid_body_names(self.envs[0], actor_handle)  # Get rigid body names for the actor
+
+        #     for k, body_name in enumerate(rigid_body_names):
+        #         global_index = self.gym.get_actor_rigid_body_index(self.envs[0], actor_handle, k, gymapi.DOMAIN_SIM)
+        #         print(f'Actor {j}, Rigid Body: {body_name}, Global Index: {global_index}')
+
+
+        # print("\n\n\n\n\n")
+
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+
+        self.rew_buf[:], self.reset_buf[:], gripper_indices = compute_franka_reward(
+            self.reset_buf, self.progress_buf, self.actions, self.handles["leftfinger_tip"], self.handles["rightfinger_tip"], contact_forces, self.states, self.reward_settings, self.max_episode_length
+        )
+        # self.draw_images(gripper_indices)
+        
+    def draw_images(self, gripper_indices):
+        for idx in gripper_indices:
+            if not os.path.exists("storage"):
+                os.mkdir("storage")
+            rgb_filename = "storage/%d%d.png" % (self.number, idx)
+            self.gym.write_camera_image_to_file(self.sim, self.envs[idx], self.cam_handles[idx], gymapi.IMAGE_COLOR, rgb_filename)   
+        self.number+=1
 
     def compute_observations(self):
         self._refresh()
-
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
 
@@ -499,35 +511,64 @@ class FrankaCubePickCamera(VecTask):
         # render the camera sensors
         self.gym.render_all_camera_sensors(self.sim)
 
+        # self.webViewer.render(fetch_results=True,
+        #               step_graphics=True,
+        #               render_all_camera_sensors=True,
+        #               wait_for_page_load=True)
+        
         cam_images = []
         for i, env_ptr in enumerate(self.envs):
+            # print(f"Processing camera {i} for environment {env_ptr}")
+            
+            # Check if the camera handle is valid
             cam_handle = self.cam_handles[i]
+            # side_handle = self.side_handles[i]
+            
+            # Capture an image tensor
             cam_image = self.capture_image(self.gym, self.sim, env_ptr, cam_handle)
+
+            if i == 0:
+                self.camera_images = cam_image.clone().permute(2,0,1)
+            # side_image = self.capture_image(self.gym, self.sim, env_ptr, side_handle)
+            
+            # # Check if the captured image is a tensor
+            # if cam_image is None:
+            #     print(f"Captured image for camera {i} is None")
+            # elif isinstance(cam_image, torch.Tensor):
+            #     print(f"Tensors are enabled for camera {i}.")
+            # else:
+            #     print(f"Tensors are not enabled for camera {i}.")
+            
             if cam_image is not None:
-                cam_images.append(cam_image[:, :, :3])
+                cam_images.append(cam_image.permute(2,0,1))
+                # cam_images.append(torch.cat((cam_image.permute(2, 0, 1), side_image.permute(2,0,1)), dim=0))
+
         if cam_images:
+            # if self.done < 5:
+            #     if not os.path.exists("storage"):
+            #         os.mkdir("storage")
+            #     rgb_filename = "storage/frame%d.png" % self.done
+            #     self.gym.write_camera_image_to_file(self.sim, self.envs[0], self.cam_handles[0], gymapi.IMAGE_COLOR, rgb_filename)   
+            # else:
+            #     raise ValueError()
+            # if self.done % 10 == 0:
+            #     for i in range(self.num_envs):
+            #         if not os.path.exists("storage/test_image%d" % i):
+            #             os.mkdir("storage/test_image%d" % i)
+            #         rgb_filename = "storage/test_image%d/frame%d.png" % (i, self.done)
+            #         self.gym.write_camera_image_to_file(self.sim, self.envs[i], self.cam_handles[i], gymapi.IMAGE_COLOR, rgb_filename)       
+            # self.done += 1
             cam_images = torch.stack(cam_images)
-            cam_images = cam_images.clone()
+            # print(cam_images.shape, " ORIG")
+            self.obs_buf = torch.swapaxes(cam_images, 1, 3).clone().float()/255.0
+            # print(self.obs_buf.shape, " TRUE")
         else:
             raise ValueError("IMAGES ARE NONE")
 
-        self.obs_buf = {}
-        self.obs_buf["image"] = cam_images
-        obs = ["eef_pos", "eef_quat"]
-        obs += ["q_gripper"] if self.control_type == "osc" else ["q"]
-        self.obs_buf["vector"] = torch.cat([torch.reshape(self.states[ob], (self.num_envs, -1)) for ob in obs], dim=-1)
-        # concatenate the actions to the vector
-        self.obs_buf["vector"] = torch.cat([self.obs_buf["vector"], self.actions], dim=-1)
-
         return self.obs_buf
 
+
     def reset_idx(self, env_ids):
-        if self.randomize:
-            self.apply_randomizations(self.randomization_params)
-            l_color = gymapi.Vec3(np.random.uniform(1, 1), np.random.uniform(1, 1), np.random.uniform(1, 1))
-            l_ambient = gymapi.Vec3(np.random.uniform(0.3, 0.7), np.random.uniform(0.3, 0.7), np.random.uniform(0.3, 0.7))
-            l_direction = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_light_parameters(self.sim, 0, l_color, l_ambient, l_direction)
         env_ids_int32 = env_ids.to(dtype=torch.int32)
 
         self._reset_init_cube_state(cube='A', env_ids=env_ids, check_valid=True)
@@ -541,11 +582,6 @@ class FrankaCubePickCamera(VecTask):
             self.franka_default_dof_pos.unsqueeze(0) +
             self.franka_dof_noise * 2.0 * (reset_noise - 0.5),
             self.franka_dof_lower_limits.unsqueeze(0), self.franka_dof_upper_limits)
-        
-        for i in range(len(env_ids)):
-            randNoise = np.random.rand(6) * 0.1 - 0.05
-            self.gym.set_camera_location(self.cam_handles[i], self.envs[env_ids[i]], gymapi.Vec3(0.55, 0, 1.5), gymapi.Vec3(-0.45, 0, 1.25))
-
 
         # Overwrite gripper init pos (no noise since these are always position controlled)
         pos[:, -2:] = self.franka_default_dof_pos[-2:]
@@ -573,7 +609,7 @@ class FrankaCubePickCamera(VecTask):
                                               gymtorch.unwrap_tensor(self._dof_state),
                                               gymtorch.unwrap_tensor(multi_env_ids_int32),
                                               len(multi_env_ids_int32))
-       
+
         # Update cube states
         multi_env_ids_cubes_int32 = self._global_indices[env_ids, -1:].flatten()
         self.gym.set_actor_root_state_tensor_indexed(
@@ -668,11 +704,6 @@ class FrankaCubePickCamera(VecTask):
         return u
 
     def pre_physics_step(self, actions):
-        # save image to file
-        # if(self.timestep != 0):
-        #     pil_img = Image.fromarray(self.obs_buf[0].cpu().numpy())
-        #     pil_img.save(f"image_{self.timestep}.png")
-        self.timestep += 1
         self.actions = actions.clone().to(self.device)
 
         # Split arm and gripper command
@@ -702,7 +733,6 @@ class FrankaCubePickCamera(VecTask):
 
     def post_physics_step(self):
         self.progress_buf += 1
-
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
@@ -739,11 +769,12 @@ class FrankaCubePickCamera(VecTask):
 #####################################################################
 
 
+
 @torch.jit.script
 def compute_franka_reward(
-    reset_buf, progress_buf, actions, states, reward_settings, max_episode_length
+    reset_buf, progress_buf, actions, lefttip, righttip, contact_forces, states, reward_settings, max_episode_length
 ):
-    # type: (Tensor, Tensor, Tensor, Dict[str, Tensor], Dict[str, float], float) -> Tuple[Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, int, int, Tensor, Dict[str, Tensor], Dict[str, float], float) -> Tuple[Tensor, Tensor, Tensor]
 
     # Compute per-env physical parameters
     target_height = states["cubeA_size"]*10
@@ -757,26 +788,48 @@ def compute_franka_reward(
 
     # reward for lifting cubeA
     cubeA_height = states["cubeA_pos"][:, 2] - reward_settings["table_height"]
-    cubeA_lifted = (cubeA_height - cubeA_size) > 0.015
+    cubeA_lifted = (cubeA_height - cubeA_size) > 0.04
     lift_reward = cubeA_lifted
 
-    # final reward for lifting successfully (only if cubeA is close to target height and corresponding location)
+    # final reward for stacking successfully (only if cubeA is close to target height and corresponding location, and gripper is not grasping)
     cubeA_on_target = torch.abs(cubeA_height - target_height) < 0.02
     target_reward = cubeA_on_target
+    
+    
+    gripper_closing = actions[:, -1] < 0.0 # gripper is closing
+    distance = (torch.norm(states["eef_lf_pos"] - states["eef_rf_pos"], dim=-1)) # distance between fingers
+    gripper_open = distance > 0.04 # gripper is open
+    gripper_stuck = (torch.norm(states["eef_lf_vel"] - states["eef_rf_vel"], dim = -1)) < 0.01 # gripper is stuck
+    # print(lefttip)
+    # print(contact_forces[0, :, :])
+    left_force = torch.norm(contact_forces[:, lefttip, :3], dim=-1)
+    right_force = torch.norm(contact_forces[:, righttip, :3], dim=-1)
+    # if(torch.any(left_force)):
+    #     print(left_force, "LEFT FORCE")
+    # if(torch.any(right_force)):
+    #     print(right_force, "RIGHT FORCE")
+    gripper_forces_encountered = (left_force > 1) & (right_force > 1)
+    gripper_reward = gripper_open & gripper_forces_encountered
+    
+    if torch.any(gripper_reward):
+        print("GRIPPING ")
+        # print(left_force)
+    if torch.any(lift_reward):
+        print("LIFTED ")
+
 
     # Compose rewards
 
-    # We either provide the goal reward or the lift + dist reward
-
+    # We either provide the stack reward or the align + dist reward
     rewards = torch.where(
-        target_reward,
-        reward_settings["r_lift_scale"] * target_reward * 2,
-        reward_settings["r_dist_scale"] * dist_reward + reward_settings["r_lift_scale"] * lift_reward * cubeA_height,
+        lift_reward,
+        1,
+        (dist_reward + 0.25 * gripper_reward)/2.25,
     )
 
-    # rewards = states["eef_lf_pos"][:, 2] - states["cubeA_pos"][:, 2]
-    
-    # Compute resets
-    reset_buf = torch.where((progress_buf >= max_episode_length - 1), torch.ones_like(reset_buf), reset_buf)
+    #print(torch.mean(rewards), "DIST_REWARD", torch.mean(dist_reward), "LIFT_REWARD", torch.count_nonzero(lift_reward), "HEIGHT", torch.mean(cubeA_height))
 
-    return rewards, reset_buf
+    # Compute resets
+    reset_buf = torch.where((progress_buf >= max_episode_length - 1) | (target_reward > 0), torch.ones_like(reset_buf), reset_buf)
+
+    return rewards, reset_buf, torch.nonzero(gripper_reward).squeeze(-1)
