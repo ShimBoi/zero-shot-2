@@ -528,7 +528,7 @@ class FrankaCubePickCamera(VecTask):
             cam_image = self.capture_image(self.gym, self.sim, env_ptr, cam_handle)
 
             if i == 0:
-                self.camera_images = cam_image.clone().permute(2,0,1)
+                self.camera_images = cam_image.clone()
             # side_image = self.capture_image(self.gym, self.sim, env_ptr, side_handle)
             
             # # Check if the captured image is a tensor

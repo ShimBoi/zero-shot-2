@@ -111,7 +111,8 @@ class RTXPPO:
         """Common image preprocessing logic."""
         bs = states.shape[0]
         image = states.reshape((-1, *self.observation_space.shape))
-        image = jax.image.resize(image, (bs, 300, 300, image.shape[-1]), method='linear') / 225.0
+        image = jax.image.resize(image, (bs, 300, 300, image.shape[-1]), method='linear') # env already does scaling / 255.0
+        print("Max image value:", jnp.max(image), "Min image value:", jnp.min(image))
         return image
 
     def act(self, inputs, role="", params=None):
@@ -122,14 +123,6 @@ class RTXPPO:
 
         params = copy.deepcopy(self.state_dict.params if params is None else params)
         params["batch_stats"] = self.batch_stats
-
-        print(f"=== ACT DEBUG ===")
-        print(f"Images shape: {images.shape}")
-        print(f"Embeds shape: {embeds.shape}")
-        print(f"Batch size: {bs}")
-        print(f"Role: {role}")
-        print(f"Params keys: {list(params.keys())}")
-        print(f"================")
 
         actions, log_prob, outputs = self._jitted_apply(
             params=params,

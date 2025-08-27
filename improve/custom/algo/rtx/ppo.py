@@ -558,8 +558,6 @@ class PPO(Agent):
 
             sampled_states = self._state_preprocessor(sampled_states, train=True)
 
-            import time
-            start_time = time.time()
             grads, policy_loss, value_loss, entropy_loss, kl_divergence, stddev, batch_stats, rng = _update_all(
                 model_act=self.model.act,
                 model_state_dict=self.model.state_dict,
@@ -576,8 +574,6 @@ class PPO(Agent):
                 clip_predicted_values=self._clip_predicted_values,
                 value_clip=self._value_clip
             )
-            elapsed_time = time.time() - start_time
-            print(f"Update step took {elapsed_time:.4f} seconds")
 
             # update model batch stats and rng
             self.model.batch_stats = batch_stats

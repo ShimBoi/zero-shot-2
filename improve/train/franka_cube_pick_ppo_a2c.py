@@ -35,7 +35,7 @@ cfg = PPO_DEFAULT_CONFIG.copy()
 # CUSTOM CONFIGS
 cfg["timesteps"] = 1600000
 cfg["num_envs"] = 32
-cfg["save_video"] = False
+cfg["save_video"] = True
 cfg["experiment"]["wandb"] = False
 cfg["is_image_obs"] = True
         
@@ -48,7 +48,7 @@ print(f"Action space: {env.action_space}")
 
 cfg["rollouts"] = 96  # memory_size
 cfg["learning_epochs"] = 5
-cfg["mini_batches"] = 96 * 2 # 96 * 4096 / 98304
+cfg["mini_batches"] = 96 * 8 # 96 * 4096 / 98304
 cfg["discount_factor"] = 0.99
 cfg["lambda"] = 0.95
 cfg["learning_rate"] = 1e-3
