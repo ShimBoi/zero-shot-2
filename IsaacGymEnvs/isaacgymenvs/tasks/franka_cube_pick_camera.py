@@ -515,7 +515,8 @@ class FrankaCubePickCamera(VecTask):
         #               step_graphics=True,
         #               render_all_camera_sensors=True,
         #               wait_for_page_load=True)
-        
+        import time
+        s = time.time()
         cam_images = []
         for i, env_ptr in enumerate(self.envs):
             # print(f"Processing camera {i} for environment {env_ptr}")
@@ -541,7 +542,8 @@ class FrankaCubePickCamera(VecTask):
             
             if cam_image is not None:
                 cam_images.append(cam_image.permute(2,0,1))
-                # cam_images.append(torch.cat((cam_image.permute(2, 0, 1), side_image.permute(2,0,1)), dim=0))
+        e = time.time()
+        print(f"env capture: {e - s}")
 
         if cam_images:
             # if self.done < 5:

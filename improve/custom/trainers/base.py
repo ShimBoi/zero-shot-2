@@ -5,6 +5,7 @@ import atexit
 import contextlib
 import sys
 import tqdm
+import time
 
 import jax.numpy as jnp
 import numpy as np
@@ -153,7 +154,6 @@ class Trainer:
         for timestep in tqdm.tqdm(
             range(self.initial_timestep, self.timesteps), disable=self.disable_progressbar, file=sys.stdout
         ):
-
             with contextlib.nullcontext():
                 # compute actions
                 actions, _, outputs = self.agents.act(states, timestep=timestep, timesteps=self.timesteps)

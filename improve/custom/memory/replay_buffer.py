@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax import random
 from typing import Dict, Iterator, Optional, Union, Tuple
+import time
 
 class ReplayBuffer:
     """
@@ -24,7 +25,7 @@ class ReplayBuffer:
         shape = (self.memory_size, self.num_envs)
         shape += (size,)
 
-        self._buffers[name] = np.zeros(shape,dtype=dtype)
+        self._buffers[name] = np.zeros(shape, dtype=dtype, order='C')
 
     def get_tensor_by_name(self, name: str, keepdim: bool = True) -> np.ndarray:
         """
@@ -80,11 +81,13 @@ class ReplayBuffer:
         kwargs[name] is an array of shape (num_envs, *feat_shape)
         """
         idx = self._pos % self.memory_size
-        for name, arr in kwargs.items():
+        for name, arr in kwargs.items(): 
             if name not in self._buffers:
                 continue
 
             self._buffers[name][idx] = arr
+            # np.copyto(self._buffers[name][idx], arr)
+
         self._pos += 1
 
     def sample_all(
