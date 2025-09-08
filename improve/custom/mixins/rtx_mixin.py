@@ -13,7 +13,7 @@ import os
 
 class RTXMixin:
 
-    def __init__(self, task="", clip_actions=False, clip_values=False, reduction="sum"):
+    def __init__(self, clip_actions=False, clip_values=False, reduction="sum"):
         self._a2c_clip_actions = clip_actions and isinstance(self.action_space, gymnasium.Space)
 
         if self._a2c_clip_actions:
@@ -49,11 +49,14 @@ class RTXMixin:
         rng, sd_rng = jax.random.split(rng)
         rng, random_rng = jax.random.split(rng)
 
+        bs = inputs["image"].shape[0]
+        seqlen = inputs["image"].shape[1]    
+
         (logits, values, outputs), new_variables = self.apply(
             params,
             obs=inputs,
             act=None,
-            act_tokens=self.act_tokens,
+            act_tokens=jnp.zeros((1, seqlen, self.num_action_tokens)),
             train=True,
             mutable=["batch_stats"],
             rngs={
@@ -63,8 +66,6 @@ class RTXMixin:
             },
         )
 
-        bs = inputs["image"].shape[0]
-        seqlen = inputs["image"].shape[1]    
 
         num_image_tokens = self.num_image_tokens
         num_action_tokens = self.num_action_tokens

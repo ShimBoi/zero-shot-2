@@ -1,5 +1,3 @@
-from improve.custom.models.rt1.rt1 import RT1
-from improve.custom.models.rt1.rtx_wrapper import RTXPPO
 import isaacgym
 
 import flax.linen as nn
@@ -15,6 +13,7 @@ from skrl.resources.preprocessors.jax.running_standard_scaler import RunningStan
 from skrl.resources.schedulers.jax import KLAdaptiveRL
 from skrl.utils import set_seed
 
+from improve.custom.models.rt1.rtx_wrapper import RTXPPO
 from improve.custom.env.select_obs_wrapper import CustomIsaacGymEnvWrapper
 from improve.custom.trainers.sequential import SequentialTrainer
 from improve.custom.memory.replay_buffer import ReplayBuffer
@@ -28,7 +27,7 @@ jax.config.update('jax_platform_name', 'gpu')
 # seed for reproducibility
 set_seed(42)  # e.g. `set_seed(42)` for fixed seed
 
-device = "cuda" if jax.devices("gpu") else "cpu"
+device = jax.devices()[0]
 print(f"Using device: {device}")
 
 cfg = PPO_DEFAULT_CONFIG.copy()
@@ -38,6 +37,7 @@ cfg["num_envs"] = 32
 cfg["save_video"] = True
 cfg["experiment"]["wandb"] = False
 cfg["is_image_obs"] = True
+cfg["seqlen"] = 9
         
 # load and wrap the Isaac Gym environment
 env = load_isaacgym_env_preview4(task_name="FrankaCubePickCamera", headless=True, num_envs=cfg["num_envs"])
@@ -46,12 +46,12 @@ env = CustomIsaacGymEnvWrapper(env, env.observation_space.shape)
 print(f"Observation space: {env.observation_space}")
 print(f"Action space: {env.action_space}")
 
-cfg["rollouts"] = 96  # memory_size
+cfg["rollouts"] = 512 # memory_size
 cfg["learning_epochs"] = 5
-cfg["mini_batches"] = 96 * 8 # 96 * 4096 / 98304
+cfg["mini_batches"] = cfg["num_envs"] * cfg["rollouts"] // 4 # 96 * 4096 / 98304
 cfg["discount_factor"] = 0.99
 cfg["lambda"] = 0.95
-cfg["learning_rate"] = 1e-3
+cfg["learning_rate"] = 5e-4
 cfg["learning_rate_scheduler"] = KLAdaptiveRL
 cfg["learning_rate_scheduler_kwargs"] = {"kl_threshold": 0.01, "min_lr": 1e-5}
 cfg["random_timesteps"] = 0
@@ -62,7 +62,7 @@ cfg["value_clip"] = 0.2
 cfg["clip_predicted_values"] = True
 cfg["entropy_loss_scale"] = 0.01
 cfg["value_loss_scale"] = 1.0
-cfg["kl_threshold"] = 0
+cfg["kl_threshold"] = 0.008
 cfg["rewards_shaper"] = None
 cfg["time_limit_bootstrap"] = True
 # cfg["state_preprocessor"] = RunningStandardScaler
@@ -87,6 +87,7 @@ models["a2c"] = RTXPPO(
     clip_actions=True,
     clip_values=False,
     reduction="sum",
+    seqlen=cfg["seqlen"]
 )
 
 # instantiate models' state dict

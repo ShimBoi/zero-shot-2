@@ -35,6 +35,7 @@ if _CPU:
 def _jax2torch(array, device, from_jax=True):
     if from_jax:
         return torch_dlpack.from_dlpack(jax_dlpack.to_dlpack(array)).to(device=device)
+        # return torch.tensor(np.array(array), device=device)
     return torch.tensor(array, device=device)
 
 

@@ -118,6 +118,83 @@ class ReplayBuffer:
             return self._sample_image_obs_windowed(names, sequence_length, minibatches, epochs, rng_key)
         else:
             return self._sample_regular_obs_optimized(names, minibatches, epochs, rng_key)
+        
+    def _sample_image_obs(self, names, sequence_length, minibatches, epochs, rng_key):
+        M, B = self.memory_size, self.num_envs
+        total_samples = M * B
+        
+        # Calculate image dimensions
+        flat_size = self._buffers["states"].shape[2:][0]
+        hw = flat_size // 3
+        H = W = int(np.sqrt(hw))
+        C = 3
+        
+        batch_size = max(1, total_samples // minibatches) if minibatches > 1 else total_samples
+        
+        print(f"Pre-computing {total_samples} windows (ultra-fast)...")
+        
+        # Reshape states once
+        states_reshaped = self._buffers["states"].reshape(M, B, H, W, C)
+        
+        # Create sample indices for all windows
+        env_indices = np.repeat(np.arange(B), M)  # [0,0,...,0, 1,1,...,1, ...]
+        time_indices = np.tile(np.arange(M), B)   # [0,1,...,M-1, 0,1,...,M-1, ...]
+        
+        # Pre-allocate final arrays
+        all_windows = np.zeros((total_samples, sequence_length, H, W, C), dtype=states_reshaped.dtype)
+        other_features = {}
+        
+        for name in names:
+            if name != "states":
+                feat_shape = self._buffers[name].shape[2:]
+                other_features[name] = np.zeros((total_samples,) + feat_shape,
+                                            dtype=self._buffers[name].dtype)
+        
+        # Vectorized window creation using broadcasting
+        print("Creating windows using ultra-fast vectorization...")
+        
+        for sample_idx in range(total_samples):
+            env_idx = env_indices[sample_idx]
+            t = time_indices[sample_idx]
+            start_idx = t - sequence_length + 1
+            
+            # Create sequence indices for this window
+            seq_indices = np.arange(sequence_length) + start_idx
+            valid_mask = seq_indices >= 0
+            
+            if np.any(valid_mask):
+                valid_seq_indices = seq_indices[valid_mask]
+                all_windows[sample_idx, valid_mask] = states_reshaped[valid_seq_indices, env_idx]
+            
+            # Copy other features
+            for name in names:
+                if name != "states":
+                    other_features[name][sample_idx] = self._buffers[name][t, env_idx]
+        
+        # Convert to JAX arrays
+        print("Converting to JAX arrays...")
+        windowed_data = {"states": jnp.array(all_windows)}
+        for name, data in other_features.items():
+            windowed_data[name] = jnp.array(data)
+        
+        print(f"Using ultra-fast pre-computed windows with batch size {batch_size}")
+        
+        # Generate batches
+        for epoch in range(epochs):
+            if epoch > 0:
+                print(f"Starting epoch {epoch + 1}/{epochs}")
+            
+            epoch_rng_key, rng_key = random.split(rng_key)
+            indices = random.permutation(epoch_rng_key, jnp.arange(total_samples))
+            
+            num_batches = (total_samples + batch_size - 1) // batch_size
+            for i in range(num_batches):
+                start_idx = i * batch_size
+                end_idx = min(start_idx + batch_size, total_samples)
+                batch_indices = indices[start_idx:end_idx]
+                
+                batch = {name: data[batch_indices] for name, data in windowed_data.items()}
+                yield batch
 
     def _sample_image_obs_windowed(self, names, sequence_length, minibatches, epochs, rng_key):
         """

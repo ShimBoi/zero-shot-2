@@ -94,12 +94,42 @@ class Transformer(nn.Module):
     def __call__(self, x: jnp.ndarray, attn_mask: jnp.ndarray, *, train: bool):
         bs, seqlen, *_ = x.shape
 
-        pos = jnp.expand_dims(jnp.arange(0, seqlen, 1), 0)
+        # modify to use a fixed maximum size to use model ckpt weights with diff seqlen
+        max_flattened_seqlen = 15 * (81 + 11)
+        pos = jnp.expand_dims(jnp.arange(0, max_flattened_seqlen, 1), 0)
         pos = jnp.tile(pos, [bs, 1])
-        pos = jax.nn.one_hot(pos, seqlen)
+        pos = jax.nn.one_hot(pos, max_flattened_seqlen)
 
         x = nn.Dense(self.feed_forward_output_size)(x)
         pos_emb = nn.Dense(self.feed_forward_output_size)(pos)
+
+        # first
+        # pos_emb = pos_emb[:, :seqlen, :]
+
+        # uniform
+        # stride = max_flattened_seqlen / seqlen
+        # selected_indices = (jnp.arange(seqlen) * stride).astype(jnp.int32)
+        # selected_indices = jnp.minimum(selected_indices, max_flattened_seqlen - 1)
+
+        # pos_emb = pos_emb[:, selected_indices, :]
+
+        # # interpolation
+        # scale = (max_flattened_seqlen - 1) / (seqlen - 1) if seqlen > 1 else 0
+        # indices = jnp.arange(seqlen) * scale
+        
+        # # Linear interpolation
+        # floor_indices = jnp.floor(indices).astype(jnp.int32)
+        # ceil_indices = jnp.minimum(jnp.ceil(indices).astype(jnp.int32), max_flattened_seqlen - 1)
+        # alpha = indices - floor_indices
+        
+        # floor_emb = pos_emb[:, floor_indices, :]
+        # ceil_emb = pos_emb[:, ceil_indices, :]
+        
+        # pos_emb = floor_emb * (1 - alpha[None, :, None]) + ceil_emb * alpha[None, :, None]
+
+        # last
+        pos_emb = pos_emb[:, -seqlen:, :]
+
         x += pos_emb
 
         for _ in range(self.num_layers):
@@ -259,62 +289,27 @@ class TokenLearnerModuleV11(nn.Module):
 
         return feat
 
-class RT1(RTXMixin, Model):
-    """Full RT-1 / RT-1-X architecture."""
-    seqlen: int = 15
+class RT1(nn.Module):
     num_layers: int = 8
-    layer_size: int = 128
+    layer_size: int = 256
     num_heads: int = 8
     feed_forward_hidden_size: int = 512
     feed_forward_output_size: int = 512
     ffn_option: FFNOptions = FFNOptions.SWIGLU
     dropout_rate: float = 0.1
-    vocab_size: int = 256
-    num_image_tokens: int = 8  # This will be overridden
+    vocab_size: int = 512
+    num_image_tokens: int = 81
     num_action_tokens: int = 11
     image_num_features: int = 512
-    world_vector_range: Tuple[float, float] = (-1.0, 1.0)
-    use_token_learner: bool = True
-    include_prev_timesteps_actions: bool = False
-    sow_intermediates: bool = False
-    
-    def __init__(self, observation_space, action_space, device, task="",
-                 clip_actions=True, clip_values=False, reduction="sum", act_tokens=None,
-                 seqlen=15, num_layers=8, layer_size=256, num_heads=8, 
-                 feed_forward_hidden_size=512, feed_forward_output_size=512,
-                 ffn_option=FFNOptions.SWIGLU, dropout_rate=0.1, vocab_size=512, 
-                 num_image_tokens=81, num_action_tokens=11, image_num_features=512, 
-                 world_vector_range=(-1.0, 1.0), use_token_learner=True, 
-                 include_prev_timesteps_actions=False, sow_intermediates=False, **kwargs):
-        
-        # Set class variables from instance parameters
-        RT1.seqlen = seqlen
-        RT1.num_layers = num_layers
-        RT1.layer_size = layer_size
-        RT1.num_heads = num_heads
-        RT1.feed_forward_hidden_size = feed_forward_hidden_size
-        RT1.feed_forward_output_size = feed_forward_output_size
-        RT1.ffn_option = ffn_option
-        RT1.dropout_rate = dropout_rate
-        RT1.vocab_size = vocab_size
-        RT1.num_image_tokens = num_image_tokens
-        RT1.num_action_tokens = num_action_tokens
-        RT1.image_num_features = image_num_features
-        RT1.world_vector_range = world_vector_range
-        RT1.use_token_learner = use_token_learner
-        RT1.include_prev_timesteps_actions = include_prev_timesteps_actions
-        RT1.sow_intermediates = sow_intermediates
-        RT1.task = task
-        RT1.clip_actions = clip_actions
-        RT1.clip_values = clip_values
-        RT1.reduction = reduction
-        RT1.observation_space = observation_space
-        RT1.action_space = action_space
-        RT1.device = device
-        RT1.act_tokens = act_tokens if act_tokens is not None else jnp.zeros((1, seqlen, num_action_tokens))
 
-        Model.__init__(self, observation_space, action_space, device, **kwargs)
-        RTXMixin.__init__(self, task=task, clip_actions=clip_actions, clip_values=clip_values, reduction=reduction)
+    world_vector_range: Tuple[float, float] = (-2.0, 2.0)
+
+    use_token_learner: bool = True
+
+    # By default, mask out previous actions.
+    include_prev_timesteps_actions: bool = False
+
+    sow_intermediates: bool = False
 
     def setup(self):
         self.image_tokenizer = ImageTokenizer(
@@ -513,49 +508,3 @@ class RT1(RTXMixin, Model):
                         mask = 1
                 action_mask[i, j] = mask
         return default_attn_mask - action_mask
-
-if __name__ == "__main__":
-    device = "cuda" if jax.devices("gpu") else "cpu"
-    print(f"Using device: {device}")
-
-    observation_space = gym.spaces.Box(
-        low=0, high=255, shape=(300, 300, 3), dtype=np.uint8
-    )
-    action_space = gym.spaces.Box(
-        low=-1.0, high=1.0, shape=(7,), dtype=np.float32
-    )
-    rt1 = RT1(observation_space, action_space, device, 
-              seqlen=15,
-              num_action_tokens=11, 
-              layer_size=256, 
-              vocab_size=512, 
-              num_image_tokens=81)
-    rt1.init_state_dict("a2c")
-
-    # Example usage:
-    img = jnp.ones((1, 300, 300, 3))
-    action, logp, output = rt1.act({"states": img}, role="a2c")
-
-    print("Action:", action, action.shape)
-    print("Log Probability:", logp, logp.shape)
-    # print("Output:", output)
-
-    # obs = {
-    #     "image": jnp.ones((1, 15, 300, 300, 3)),
-    #     "natural_language_embedding": jnp.ones((1, 15, 512)),
-    # }
-
-    # variables = rt1.init(
-    #     {
-    #         "params": jax.random.PRNGKey(0),
-    #         "random": jax.random.PRNGKey(0),
-    #     },
-    #     obs,
-    #     None,
-    #     act_tokens=jnp.zeros((1, 6, 11)),
-    #     train=False,
-    # )
-
-    # output, values = rt1.apply(variables, obs, act=None, act_tokens=jnp.zeros((1, 6, 11)), train=False, rngs={"random": jax.random.PRNGKey(0)})
-    # print(output, output.shape)
-    # print(values, values.shape)

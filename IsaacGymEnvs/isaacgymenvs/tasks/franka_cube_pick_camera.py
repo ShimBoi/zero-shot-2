@@ -515,7 +515,6 @@ class FrankaCubePickCamera(VecTask):
         #               step_graphics=True,
         #               render_all_camera_sensors=True,
         #               wait_for_page_load=True)
-        
         cam_images = []
         for i, env_ptr in enumerate(self.envs):
             # print(f"Processing camera {i} for environment {env_ptr}")
