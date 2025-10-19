@@ -5,9 +5,6 @@ import jax.numpy as jnp
 import isaacgym
 import flax.linen as nn
 
-import torch
-torch.backends.cuda.matmul.allow_tf32 = True
-
 # import the skrl components to build the RL system
 from skrl import config
 from skrl.envs.loaders.jax import load_isaacgym_env_preview4
@@ -45,15 +42,15 @@ cfg["seqlen"] = 9
 # load and wrap the Isaac Gym environment
 env = load_isaacgym_env_preview4(task_name="FrankaCubePickCamera", headless=True, num_envs=cfg["num_envs"])
 env = wrap_env(env)
-env = CustomIsaacGymEnvWrapper(env, device, env.observation_space.shape)
+env = CustomIsaacGymEnvWrapper(env, env.observation_space.shape)
 
 print(f"Observation space: {env.observation_space}")
 print(f"Action space: {env.action_space}")
 print(f"Num envs: {env.num_envs}")
 
-cfg["rollouts"] = 512  # memory_size
+cfg["rollouts"] = 64  # memory_size
 cfg["learning_epochs"] = 6
-cfg["mini_batches"] = cfg["num_envs"] * cfg["rollouts"] // 64 # 96 * 4096 / 98304
+cfg["mini_batches"] = cfg["num_envs"] * cfg["rollouts"] // 32 # 96 * 4096 / 98304
 cfg["discount_factor"] = 0.99
 cfg["lambda"] = 0.95
 cfg["learning_rate"] = 1e-3
@@ -97,14 +94,12 @@ models["a2c"] = RTXPPO(
 for role, model in models.items():
     model.init_state_dict(role)
 
-
 agent = PPO(models=models,
             memory=memory,
             cfg=cfg,
             observation_space=env.observation_space,
             action_space=env.action_space,
             device=device)
-
 
 # configure and instantiate the RL trainer
 cfg_trainer = {"timesteps": cfg["timesteps"], "headless": True, "save_video": cfg["save_video"], "output_folder": "videos"}

@@ -346,9 +346,37 @@ class FrankaCubePickCamera(VecTask):
             camera_props.width = self.width  # Desired width
             camera_props.height = self.height  # Desired height
             camera_props.enable_tensors = True
+            camera_props.horizontal_fov = 70.0      # narrower FOV for zoom
+            camera_props.near_plane = 0.01
+            camera_props.far_plane  = 3.0
             cam_handle = self.gym.create_camera_sensor(env_ptr, camera_props)
             self.cam_handles.append(cam_handle)
-            self.gym.set_camera_location(cam_handle, env_ptr, gymapi.Vec3(1, 0, 1.5), gymapi.Vec3(0.5, 0, 1.5))  # Adjust location
+
+            # ### right corner near base of franka
+            # eye = gymapi.Vec3(
+            #     franka_start_pose.p.x,   # pull back slightly
+            #     franka_start_pose.p.y - 0.60,   # move further to the side to avoid occlusion
+            #     franka_start_pose.p.z + 0.60,   # higher vantage point
+            # )
+
+            # # Aim near the center of the workspace on the table
+            # target = gymapi.Vec3(
+            #     0.20,
+            #     0.15,
+            #     float(self._table_surface_pos[2] + 0.02),   # near table surface
+            # )
+
+            eye = gymapi.Vec3(
+                0.55,   # X: far positive side of table
+                -0.55,   # Y: far positive side
+                self._table_surface_pos[2] + 0.4  # Z: a bit above table
+            )
+            target = gymapi.Vec3(
+                0.05,   # slight bias toward center (near cube spawn zone)
+                0.05,
+                float(self._table_surface_pos[2] + 0.03)
+            )
+            self.gym.set_camera_location(cam_handle, env_ptr, eye, target)  # Adjust location
             # side_handle = self.gym.create_camera_sensor(env_ptr, camera_props)
             # self.side_handles.append(side_handle)
             # self.gym.set_camera_location(side_handle, env_ptr, gymapi.Vec3(0,0.5,1.25), gymapi.Vec3(0,-0.5,1.25))
@@ -515,8 +543,6 @@ class FrankaCubePickCamera(VecTask):
         #               step_graphics=True,
         #               render_all_camera_sensors=True,
         #               wait_for_page_load=True)
-        import time
-        s = time.time()
         cam_images = []
         for i, env_ptr in enumerate(self.envs):
             # print(f"Processing camera {i} for environment {env_ptr}")
@@ -542,8 +568,7 @@ class FrankaCubePickCamera(VecTask):
             
             if cam_image is not None:
                 cam_images.append(cam_image.permute(2,0,1))
-        e = time.time()
-        print(f"env capture: {e - s}")
+                # cam_images.append(torch.cat((cam_image.permute(2, 0, 1), side_image.permute(2,0,1)), dim=0))
 
         if cam_images:
             # if self.done < 5:

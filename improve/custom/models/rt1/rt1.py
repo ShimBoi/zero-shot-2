@@ -142,8 +142,10 @@ class Transformer(nn.Module):
                 ffn_option=self.ffn_option,
             )(x, attn_mask, train=train)
 
+        # jax.lax.stop_gradient(x)
+        hidden = x
         output_tokens = nn.Dense(self.vocab_size)(x)
-        return output_tokens
+        return output_tokens, hidden
 
 
 class ImageTokenizer(nn.Module):
@@ -289,6 +291,18 @@ class TokenLearnerModuleV11(nn.Module):
 
         return feat
 
+class ValueMLP(nn.Module):
+    hidden_size: int
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, train: bool) -> jnp.ndarray:
+        h = nn.Dense(self.hidden_size)(x)
+        h = nn.relu(h)
+        h = nn.Dense(self.hidden_size // 4)(h)
+        h = nn.relu(h)
+        h = nn.Dense(1)(h)
+        return h
+
 class RT1(nn.Module):
     num_layers: int = 8
     layer_size: int = 256
@@ -318,7 +332,7 @@ class RT1(nn.Module):
             use_token_learner=self.use_token_learner,
         )
 
-        self.value_head = nn.Dense(1, name='value_head')
+        self.value_mlp = ValueMLP(hidden_size=self.feed_forward_output_size)
 
     def tokenize_image(
         self, image: jnp.ndarray, context: jnp.ndarray, *, train: bool
@@ -403,7 +417,7 @@ class RT1(nn.Module):
         attn_mask = self._construct_attn_mask(
             seqlen * (self.num_image_tokens + self.num_action_tokens)
         )
-        output_tokens = Transformer(
+        output_tokens, hidden = Transformer(
             num_layers=self.num_layers,
             layer_size=self.layer_size,
             num_heads=self.num_heads,
@@ -414,16 +428,21 @@ class RT1(nn.Module):
             ffn_option=self.ffn_option,
         )(full_tokens, attn_mask=attn_mask, train=train)
 
+        # VALUE: use last prompt (image) token of final timestep
+        tokens_per_timestep = self.num_image_tokens + self.num_action_tokens
+        last_image_token_index = tokens_per_timestep * seqlen - self.num_action_tokens - 1
+        # hidden: [bs, total_tokens, hidden_dim]
+        prompt_hidden = hidden[:, last_image_token_index, :]  # [bs, hidden_dim]
+        prompt_hidden = jax.lax.stop_gradient(prompt_hidden)
+        values = self.value_mlp(prompt_hidden, train=train)  # [bs, 1]
+
         time_step_tokens = self.num_image_tokens + self.num_action_tokens
         logits = jnp.reshape(
             output_tokens,
             [bs, seqlen, time_step_tokens, self.vocab_size],
         )
-        image_tokens = logits[:, :, :self.num_image_tokens] # [bs, seqlen, num_image_tokens, vocab_size]
-        pooled = jnp.mean(image_tokens, axis=2)  # [bs, seqlen, vocab_size]
-        values = self.value_head(pooled)  # [bs, seqlen, 1]
 
-        return output_tokens, values, {}
+        return output_tokens, values[:, None, :], {}
     
     def _compute_values(self, transformer_output, seqlen):
         """Compute value estimate for final timestep only."""

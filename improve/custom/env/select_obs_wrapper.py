@@ -71,16 +71,15 @@ class SelectObsWrapper:
         return getattr(self._env, name)
 
 class CustomIsaacGymEnvWrapper:
-    def __init__(self, env, device, image_shape=IMAGE_SHAPE):
+    def __init__(self, env, image_shape=IMAGE_SHAPE):
         self._env = env
         self._raw_obs = None
         self.image_shape = image_shape
-        self.device = device
 
     def _get_observation(self, observations):
         """Get the observation from the environment"""
         if "image" in observations:
-            image = _torch2jax(observations["image"], self.device)
+            image = observations["image"].cpu().numpy()
         else:
             image = jnp.zeros((1, *self.image_shape), dtype=jnp.float32)
 

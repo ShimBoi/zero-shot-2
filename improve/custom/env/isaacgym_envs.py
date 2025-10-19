@@ -34,7 +34,8 @@ if _CPU:
 
 def _jax2torch(array, device, from_jax=True):
     if from_jax:
-        return torch_dlpack.from_dlpack(jax_dlpack.to_dlpack(array)).to(device=device)
+        # return torch_dlpack.from_dlpack(jax_dlpack.to_dlpack(array)).to(device=device)
+        return torch.tensor(np.array(array), device=device)
     return torch.tensor(array, device=device)
 
 
@@ -180,7 +181,11 @@ class IsaacGymPreview3Wrapper(Wrapper):
         :return: Observation, reward, terminated, truncated, info
         :rtype: tuple of np.ndarray or jax.Array and any other info
         """
+        import time
+        s = time.time()
         actions = _jax2torch(actions, self._env.device, self._jax)
+        e = time.time()
+        print(f"Conversion time from JAX to Torch: {e - s:.6f} seconds")
 
         with torch.no_grad():
             self.observations, reward, terminated, self._info = self._env.step(

@@ -1,20 +1,17 @@
 from collections import deque
 import copy
-import flax
 import gymnasium
 from improve.custom.models.rt1.rt1 import RT1
-from improve.custom.models.rt1.utils import detokenize_action
+from improve.custom.models.rt1.utils import detokenize_action, tokenize_action
 import jax
 import jax.numpy as jnp
 from skrl import config
-import tensorflow as tf
 import tensorflow_hub as hub
 import json
 import os
 from typing import Mapping, Optional, Union
 from skrl.models.jax.base import Model, StateDict
 import numpy as np
-import jax.profiler
 
 class RTXPPO:
     """
@@ -23,55 +20,37 @@ class RTXPPO:
     """
 
     def __init__(self, observation_space, action_space, device, task="", clip_actions=True, clip_values=False, reduction="sum", seqlen=15):
-        self._embed_cache = {}
-        self._cache_file = "task_embeddings.json"
 
         self.rng = config.jax.key
-
         self.model = RT1()
-        self.act_tokens = jnp.zeros((1, seqlen, self.model.num_action_tokens))
-
         self.seqlen = seqlen
         self.hist = deque(maxlen=self.seqlen)
-        self.num_image_history = self.rng_steps = 0
-
-        self._load_cache()
-
-        if task in self._embed_cache:
-            print(f"Using cached embedding for task: '{task}'")
-            embeds = jnp.array(self._embed_cache[task])
-        else:
-            print(f"Computing new embedding for task: '{task}'")
-            self.llm = hub.load("https://tfhub.dev/google/universal-sentence-encoder-large/5")
-            embeds = self.llm([task]).numpy()
-            
-            self._embed_cache[task] = embeds.tolist()
-            self._save_cache()
-            
-            del self.llm
-            import gc
-            gc.collect()
-
-        self.embeds = jnp.array(embeds)
-        self.embeds = jnp.expand_dims(self.embeds, 1)
-        self.embeds = jnp.repeat(self.embeds, self.seqlen, axis=1) # leave batch for later
-
-        self._jitted_apply = jax.jit(self.apply, static_argnames=("train"))
+        self.num_image_history = 0
+        self.trainig = False
+        self._load_embeddings(task)
 
         ### RTX Mixin initialization
         self.device = device
         self.observation_space = observation_space
         self.action_space = action_space
+        self._setup_mixin(clip_actions, clip_values, reduction)
 
-        self._a2c_clip_actions = clip_actions and isinstance(action_space, gymnasium.Space)
+        self._jitted_rollout = jax.jit(self._rollout)
+        self._jitted_update = jax.jit(self._update)
+
+    def _setup_mixin(self, clip_actions, clip_values, reduction):
+        """Setup RTX mixin parameters."""
+
+        self._a2c_clip_actions = clip_actions and isinstance(self.action_space, gymnasium.Space)
+        self._d_clip_values = clip_values and isinstance(self.action_space, gymnasium.Space)
+
         if self._a2c_clip_actions:
-            self._a2c_clip_actions_min = jnp.array(action_space.low, dtype=jnp.float32)
-            self._a2c_clip_actions_max = jnp.array(action_space.high, dtype=jnp.float32)
+            self._a2c_clip_actions_min = jnp.array(self.action_space.low, dtype=jnp.float32)
+            self._a2c_clip_actions_max = jnp.array(self.action_space.high, dtype=jnp.float32)
         else:
             self._a2c_clip_actions_min = -jnp.inf
             self._a2c_clip_actions_max = jnp.inf
 
-        # Reduction setup
         if reduction not in ["mean", "sum", "prod", "none"]:
             raise ValueError("reduction must be one of 'mean', 'sum', 'prod' or 'none'")
         self._a2c_reduction = (
@@ -87,7 +66,7 @@ class RTXPPO:
         # NOTE: why clip by action space??
         if self._d_clip_values:
             self._d_clip_values_min = jnp.array(self.action_space.low, dtype=jnp.float32)
-            self._d_clip_values_max = jnp.array(self.action_space.high, dtype=jnp.float32)
+            self._d_clip_values_max = jnp.array(self.action_space.high, dtype=jnp.float32)   
 
     def _add_to_history(self, image) -> None:
         self.hist.append(image)
@@ -104,7 +83,6 @@ class RTXPPO:
                 )
             )
             observation = jnp.concatenate([pad, observation], axis=1)
-        self.rng_steps += 1
         return observation[:, -self.seqlen :]
 
     def get_states(self):
@@ -145,21 +123,21 @@ class RTXPPO:
         image = jax.image.resize(image, (bs, 300, 300, image.shape[-1]), method='linear') # env already does scaling / 255.0
         return image
 
-    def apply(self, params, observation, rng, train=False):
+    def _forward(self, params, observation, rng, train=False):
         rng, params_rng = jax.random.split(rng)
         rng, dropout_rng = jax.random.split(rng)
         rng, sd_rng = jax.random.split(rng)
         rng, random_rng = jax.random.split(rng)
 
+        mutable = ["batch_stats"] if train else []
         bs, seqlen, *_ = observation["image"].shape
-
         (logits, values, outputs), new_variables = self.model.apply(
             params,
             obs=observation,
             act=None,
-            act_tokens=self.act_tokens,
+            act_tokens=jnp.zeros((bs, 6, 11)),
             train=train,
-            mutable=["batch_stats"],
+            mutable=mutable,
             rngs={
                 "params": params_rng,
                 "dropout": dropout_rng,
@@ -170,61 +148,95 @@ class RTXPPO:
         num_image_tokens = self.model.num_image_tokens
         num_action_tokens = self.model.num_action_tokens
         time_step_tokens = num_image_tokens + num_action_tokens
+
         logits = jnp.reshape(logits, (bs, seqlen, time_step_tokens, self.model.vocab_size))
         logits = logits[:, -1, num_image_tokens - 1 : -1] # [bs, num_action_tokens, vocab_size]
-
-        # Sample actions from the logits
-        rng, log_probs_rng = jax.random.split(rng)
-        action_token = jax.random.categorical(log_probs_rng, logits, axis=-1)
-
-        # only care about action tokens [1:8]
-        clipped_logits = logits[:, 1:8] # [bs, 7, vocab_size]
-        clipped_action_tokens = action_token[:, 1:8]  # [bs, 7]
-
-        log_probs_all = jax.nn.log_softmax(clipped_logits, axis=-1)
-        action_token_expanded = jnp.expand_dims(clipped_action_tokens, axis=-1)  # [bs, 7, 1]
-        log_probs = jnp.take_along_axis(log_probs_all, action_token_expanded, axis=-1).squeeze(axis=-1)  # [bs, 7]
-
-        actions_dict = detokenize_action(
-            action_token, self.model.vocab_size, self.model.world_vector_range)
-        
-        # only select the world vector, rotation delta, gripper
-        actions = jnp.concatenate(
-            [
-                actions_dict["world_vector"],
-                actions_dict["rotation_delta"],
-                actions_dict["gripper_closedness_action"],
-            ],
-            axis=-1,
-        )
-
         values = values[:, -1, :]  # [bs, 1]
 
-        outputs["values"] = values
-        outputs["batch_stats"] = new_variables["batch_stats"]
+        outputs["batch_stats"] = new_variables.get("batch_stats", params["batch_stats"])        
+        return logits, values, outputs
 
-        return actions, log_probs, outputs
+    def _rollout(self, params, observation, rng):
+        with jax.named_scope("forward_apply"):
+            logits, values, outputs = self._forward(
+                params=params,
+                observation=observation,
+                rng=rng,
+                train=False
+            )
 
+        with jax.named_scope("action_sampling"):
+            # only care about action tokens [1:8]
+            clipped_logits = logits[:, 1:8] # [bs, 7, vocab_size]
+
+            # Sample actions from the logits
+            action_token = jax.random.categorical(rng, logits, axis=-1)
+            clipped_action_tokens = action_token[:, 1:8]  # [bs, 7]
+
+            log_probs_all = jax.nn.log_softmax(clipped_logits, axis=-1)
+            idx = clipped_action_tokens[..., jnp.newaxis]  # [bs, 7, 1]
+            log_probs_tokens = jnp.take_along_axis(log_probs_all, idx, axis=-1)[..., 0]  # [bs, 7]
+            log_prob = jnp.sum(log_probs_tokens, axis=-1, keepdims=True)         # [bs, 1]
+
+        with jax.named_scope("detokenize"):
+            actions_dict = detokenize_action(
+                action_token, self.model.vocab_size, self.model.world_vector_range)
+            
+            # only select the world vector, rotation delta, gripper
+            actions = jnp.concatenate(
+                [
+                    actions_dict["world_vector"],
+                    actions_dict["rotation_delta"],
+                    actions_dict["gripper_closedness_action"],
+                ],
+                axis=-1,
+            )
+        return actions, log_prob, values, outputs
+    
+    def _update(self, params, observation, act_tokens, rng):
+        logits, values, outputs = self._forward(
+            params=params,
+            observation=observation,
+            rng=rng,
+            train=True
+        )
+
+        clipped_logits = logits[:, 1:8] # [bs, 7, vocab_size]
+        log_probs_all = jax.nn.log_softmax(clipped_logits, axis=-1)          # [bs, 7, vocab]
+        idx = act_tokens[:, 1:8][..., None]                                        # [bs, 7, 1]
+        log_probs_tokens = jnp.take_along_axis(log_probs_all, idx, axis=-1)[..., 0]  # [bs, 7]
+        log_prob = jnp.sum(log_probs_tokens, axis=-1, keepdims=True)         # [bs, 1]
+
+        return log_prob, values, outputs
+
+    # should never be jit compiled (not pure)
     def act(self, inputs, role="", params=None):
-        images = self._process_inputs_by_role(role, inputs) 
+        images = self._process_inputs_by_role(role, inputs)
         bs = images.shape[0]
         embeds = jnp.repeat(self.embeds, bs, axis=0)
         observation = {"image": images, "natural_language_embedding": embeds}
 
-        params = copy.deepcopy(self.state_dict.params if params is None else params)
+        params = self.state_dict.params if params is None else params
         params["batch_stats"] = self.batch_stats
 
-        actions, log_prob, outputs = self._jitted_apply(
+        self.rng, call_rng = jax.random.split(self.rng)
+        import time
+        start_time = time.time()
+        actions, log_prob, values, outputs = self._jitted_rollout(
             params=params,
             observation=observation,
-            rng=self.rng,
-            train=self.training
+            rng=call_rng,
         )
+        jax.block_until_ready(actions)
+        end_time = time.time()
+        print(f"Rollout time for batch size {bs}: {end_time - start_time:.6f} seconds")
 
-        actions = jnp.clip(
+        actions = _rescale_action_with_bound(
             actions,
-            a_min=self._a2c_clip_actions_min, 
-            a_max=self._a2c_clip_actions_max
+            low=-2.0,
+            high=2.0,
+            post_scaling_min=self._a2c_clip_actions_min,
+            post_scaling_max=self._a2c_clip_actions_max,
         )
 
         if self._a2c_reduction:
@@ -233,33 +245,41 @@ class RTXPPO:
             log_prob = jnp.expand_dims(log_prob, -1)
 
         if self._d_clip_values:
-            values = jnp.clip(outputs["values"], a_min=self._d_clip_values_min, a_max=self._d_clip_values_max)
-            outputs["values"] = values
+            values = jnp.clip(values, a_min=self._d_clip_values_min, a_max=self._d_clip_values_max)
 
-        # compatibility
-        outputs["stddev"] = jnp.zeros_like(outputs["values"])
+        outputs["values"] = values
+        outputs["stddev"] = jnp.zeros_like(values)
 
-        # update rngs and batch stats
-        new_rng = jax.random.fold_in(self.rng, self.rng_steps)
-        outputs["rng"] = new_rng
-
-        ### TODO: move new rng setting to inside this method
         return actions, log_prob, outputs
 
+    # update method should handle formatting params/inputs (since it's jitted)
     def update_act(self, inputs, role="", params=None, rng=None):
         images = self._process_inputs_by_role(role, inputs) 
         bs = images.shape[0]
         embeds = jnp.repeat(self.embeds, bs, axis=0)
         observation = {"image": images, "natural_language_embedding": embeds}
 
-        params = copy.deepcopy(self.state_dict.params if params is None else params)
-        params["batch_stats"] = self.batch_stats
+        actions = inputs["actions"]
+        actions_dict = {
+            "world_vector": actions[:, :3],
+            "rotation_delta": actions[:, 3:6],
+            "gripper_closedness_action": actions[:, 6:7],
+            "base_displacement_vertical_rotation": jnp.zeros((bs, 1)),
+            "base_displacement_vector": jnp.zeros((bs, 2)),
+            "terminate_episode": jnp.zeros((bs, 1)),
+        }
+        act_tokens = tokenize_action(
+            actions=actions_dict,
+            vocab_size=self.model.vocab_size,
+            world_vector_range=self.model.world_vector_range,
+        )
 
-        actions, log_prob, outputs = self._jitted_apply(
+        rng, call_rng = jax.random.split(rng)
+        log_prob, values, outputs = self._jitted_update(
             params=params,
             observation=observation,
-            rng=rng,
-            train=self.training
+            act_tokens=act_tokens,
+            rng=call_rng,
         )
 
         if self._a2c_reduction:
@@ -268,11 +288,11 @@ class RTXPPO:
             log_prob = jnp.expand_dims(log_prob, -1)
 
         if self._d_clip_values:
-            values = jnp.clip(outputs["values"], a_min=self._d_clip_values_min, a_max=self._d_clip_values_max)
-            outputs["values"] = values
+            values = jnp.clip(values, a_min=self._d_clip_values_min, a_max=self._d_clip_values_max)
 
-        outputs["stddev"] = jnp.zeros_like(outputs["values"])
-        outputs["rng"] = new_rng = jax.random.fold_in(rng, self.rng_steps)
+        outputs["values"] = values
+        outputs["stddev"] = jnp.zeros_like(values)
+        outputs["new_rng"] = rng
         return log_prob, outputs
 
     def init_state_dict(
@@ -297,8 +317,6 @@ class RTXPPO:
                     If not provided, the skrl's PRNG key (``config.jax.key``) will be used
         :type key: jax.Array, optional
         """
-        print("Default backend:", jax.default_backend())
-
         if ckpt:
             raise NotImplementedError("Loading from checkpoint is not implemented yet.")
 
@@ -319,7 +337,7 @@ class RTXPPO:
             rngs=rngs,
             obs=obs,
             act=None,
-            act_tokens=self.act_tokens,
+            act_tokens=jnp.zeros((1, 6, 11)),
             train=False
         )
 
@@ -338,6 +356,16 @@ class RTXPPO:
         # init internal state dict
         with jax.default_device(self.device):
             self.state_dict = StateDict.create(apply_fn=None, params={"params": params})
+
+        self.enable_bfloat16()
+
+    def enable_bfloat16(self):
+        def cast(tree):
+            return jax.tree_util.tree_map(
+                lambda x: x.astype(jnp.bfloat16) if (hasattr(x, "dtype") and x.dtype == jnp.float32 and x.ndim > 0) else x,
+                tree
+            )
+        self.state_dict = StateDict.create(apply_fn=None, params={"params": cast(self.state_dict.params["params"])})            
     
     ### From jax base skrl
     def set_mode(self, mode: str) -> None:
@@ -355,9 +383,32 @@ class RTXPPO:
         else:
             raise ValueError("Invalid mode. Use 'train' for training or 'eval' for evaluation")
 
+    def _load_embeddings(self, task):
+        self._load_cache()
+        if task in self._embed_cache:
+            print(f"Using cached embedding for task: '{task}'")
+            embeds = jnp.array(self._embed_cache[task])
+        else:
+            print(f"Computing new embedding for task: '{task}'")
+            self.llm = hub.load("https://tfhub.dev/google/universal-sentence-encoder-large/5")
+            embeds = self.llm([task]).numpy()
+            
+            self._embed_cache[task] = embeds.tolist()
+            self._save_cache()
+            
+            del self.llm
+            import gc
+            gc.collect()
+
+        self.embeds = jnp.array(embeds)
+        self.embeds = jnp.expand_dims(self.embeds, 1)
+        self.embeds = jnp.repeat(self.embeds, self.seqlen, axis=1) # leave batch for later
     
     def _load_cache(self):
         """Load cache from external JSON file."""
+        self._embed_cache = {}
+        self._cache_file = "task_embeddings.json"
+
         if os.path.exists(self._cache_file):
             try:
                 with open(self._cache_file, 'r') as f:
@@ -411,8 +462,68 @@ class RTXPPO:
         return _entropy(stddev)
 
     def __getattr__(self, name):
+        # use fallback to return attribute from model
+        if name in self.__dict__:
+            return self.__dict__[name]
         return getattr(self.model, name)
-    
+
+    def profile_rollout(self, batch_size: int = 64, steps: int = 5, logdir: str = None):
+        """
+        Profile ONLY the jitted _rollout.
+        - Separates compile time
+        - Reports mean / std exec time (post-warmup)
+        - If logdir is given, writes a TensorBoard trace (open with: tensorboard --logdir logdir)
+        """
+        import time
+        if not hasattr(self, "state_dict"):
+            raise RuntimeError("Call init_state_dict before profiling.")
+
+        # Dummy observation (no Python preprocessing)
+        images = jnp.zeros((batch_size, self.seqlen, 300, 300, 3), dtype=jnp.float32)
+        embeds = jnp.repeat(self.embeds[:1], batch_size, axis=0)
+        obs = {"image": images, "natural_language_embedding": embeds}
+
+        # Build a params dict including batch_stats (avoid mutating self.state_dict in place)
+        params = {"params": self.state_dict.params["params"], "batch_stats": self.batch_stats}
+
+        # Compile (lower + compile separates timing cleanly)
+        self.rng, key = jax.random.split(self.rng)
+        t0 = time.time()
+        lowered = self._jitted_rollout.lower(params, obs, key)
+        self._compiled_rollout = lowered.compile()
+        compile_s = time.time() - t0
+        print(f"[profile_rollout] compile: {compile_s:.3f}s")
+
+        # Optional trace start
+        tracing = logdir is not None
+        if tracing:
+            os.makedirs(logdir, exist_ok=True)
+            print(f"[profile_rollout] tracing -> {logdir}")
+            jax.profiler.start_trace(logdir)
+
+        # Warmup (ensures autotune)
+        out = self._compiled_rollout(params, obs, key)
+        jax.tree_util.tree_map(lambda x: x.block_until_ready(), out)
+
+        # Timed executions
+        times = []
+        for i in range(steps):
+            self.rng, key = jax.random.split(self.rng)
+            with jax.profiler.StepTraceAnnotation("rollout_step", step_num=i):
+                t1 = time.time()
+                out = self._compiled_rollout(params, obs, key)
+                jax.tree_util.tree_map(lambda x: x.block_until_ready(), out)
+                times.append(time.time() - t1)
+
+        if tracing:
+            jax.profiler.stop_trace()
+            print("[profile_rollout] trace stopped")
+
+        import numpy as np
+        arr = np.array(times)
+        print(f"[profile_rollout] exec_mean={arr.mean()*1000:.2f} ms  exec_std={arr.std()*1000:.2f} ms  steps={steps}")
+        return {"compile_s": compile_s, "exec_mean_s": float(arr.mean()), "exec_std_s": float(arr.std())}
+
 @jax.jit
 def _entropy(logits):
     logits = logits - \
@@ -421,3 +532,20 @@ def _entropy(logits):
     p_log_p = logits * jax.nn.softmax(logits)
     return -p_log_p.sum(-1)
 
+def _rescale_action_with_bound(
+    actions: jax.Array,
+    low: float,
+    high: float,
+    safety_margin: float = 0.0,
+    post_scaling_max: float = 1.0,
+    post_scaling_min: float = -1.0,
+) -> np.ndarray:
+    """Formula taken from https://stats.stackexchange.com/questions/281162/scale-a-number-between-a-range."""
+    resc_actions = (actions - low) / (high - low) * (
+        post_scaling_max - post_scaling_min
+    ) + post_scaling_min
+    return jnp.clip(
+        resc_actions,
+        post_scaling_min + safety_margin,
+        post_scaling_max - safety_margin,
+    )

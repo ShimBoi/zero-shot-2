@@ -146,7 +146,7 @@ def _compute_gae(
 @functools.partial(jax.jit, static_argnames=("model_act", "get_entropy", "entropy_loss_scale", "clip_predicted_values"))
 def _update_all(
     model_act,
-    model_state_dict,
+    params,
     sampled_states,
     sampled_actions,
     sampled_log_prob,
@@ -164,11 +164,13 @@ def _update_all(
     def loss_fn(params):
         """Update both policy and value networks in a single function"""
         next_log_prob, outputs = model_act(
-                {"states": sampled_states}, "update", params, rng)
+                {"states": sampled_states, "actions": sampled_actions}, 
+                role="update", 
+                params=params, 
+                rng=rng)
         value_pred = outputs["values"]
         
         """Compute the policy loss."""
-
         ratio = next_log_prob - sampled_log_prob
         kl_divergence = ((jnp.exp(ratio) - 1) - ratio).mean()
 
@@ -186,15 +188,13 @@ def _update_all(
         p_loss = -jnp.minimum(surrogate, surrogate_clipped).mean()
         
         """Compute the critic loss."""
-        # _, _, outputs = model_act({"states": sampled_states}, "update", params)
-        # value_pred = outputs["values"]
-
         if clip_predicted_values:
             value_pred = sampled_values + \
                 jnp.clip(value_pred - sampled_values, -
                             value_clip, value_clip)
         v_loss = value_loss_scale * ((sampled_returns - value_pred) ** 2).mean()
         total_loss = p_loss + v_loss + entropy_loss
+
         aux = {
             "p_loss": p_loss,
             "v_loss": v_loss,
@@ -202,11 +202,11 @@ def _update_all(
             "kl_divergence": kl_divergence,
             "stddev": outputs["stddev"],
             "batch_stats": outputs["batch_stats"],
-            "rng": outputs["rng"],
+            "new_rng": outputs["new_rng"]
         }
         return total_loss, aux
     
-    (total_loss, aux), grad = jax.value_and_grad(loss_fn, has_aux=True, argnums=0)(model_state_dict.params)
+    (total_loss, aux), grad = jax.value_and_grad(loss_fn, has_aux=True, argnums=0)(params)
 
     p_loss = aux["p_loss"]
     v_loss = aux["v_loss"]
@@ -214,7 +214,7 @@ def _update_all(
     kl_divergence = aux["kl_divergence"]
     stddev = aux["stddev"]
     batch_stats = aux["batch_stats"]
-    rng = aux["rng"]
+    rng = aux["new_rng"]
     return grad, p_loss, v_loss, entropy_loss, kl_divergence, stddev, batch_stats, rng
 
 class PPO(Agent):
@@ -397,7 +397,7 @@ class PPO(Agent):
         # sample stochastic actions
         # actions, log_prob, outputs = self.policy.act({"states": self._state_preprocessor(states)}, role="policy")
         actions, log_prob, outputs = self.model.act({"states": self._state_preprocessor(states)}, role="rollout")
-        self.model.rng = outputs["rng"]
+
         if not self._jax:  # numpy backend
             actions = jax.device_get(actions)
             log_prob = jax.device_get(log_prob)
@@ -555,7 +555,9 @@ class PPO(Agent):
         kl_divergences = []
 
         # mini-batches loop
+        steps = 0
         for batch in ds:
+            steps += 1
             sampled_states = jax.lax.stop_gradient(batch["states"])
             sampled_actions = jax.lax.stop_gradient(batch["actions"])
             sampled_log_prob = jax.lax.stop_gradient(batch["log_prob"])
@@ -565,9 +567,11 @@ class PPO(Agent):
 
             sampled_states = self._state_preprocessor(sampled_states, train=True)
 
+            params = self.model.state_dict.params
+            params["batch_stats"] = self.model.batch_stats
             grads, policy_loss, value_loss, entropy_loss, kl_divergence, stddev, batch_stats, rng = _update_all(
                 model_act=self.model.update_act,
-                model_state_dict=self.model.state_dict,
+                params=params,
                 sampled_states=sampled_states,
                 sampled_actions=sampled_actions,
                 sampled_log_prob=sampled_log_prob,
@@ -582,6 +586,7 @@ class PPO(Agent):
                 value_clip=self._value_clip,
                 rng=self.model.rng
             )
+            print("policy loss:", policy_loss.item(), "value loss:", value_loss.item())
 
             # update model batch stats and rng
             self.model.batch_stats = batch_stats
@@ -620,11 +625,12 @@ class PPO(Agent):
                 self._learning_rate *= self.scheduler(timestep)
 
         # record data
-        self.track_data("Loss / Policy loss", cumulative_policy_loss / (self._learning_epochs * self._mini_batches))
-        self.track_data("Loss / Value loss", cumulative_value_loss / (self._learning_epochs * self._mini_batches))
+        print("cumulative policy loss:", cumulative_policy_loss, "cumulative value loss:", cumulative_value_loss, "steps:", steps)
+        self.track_data("Loss / Policy loss", cumulative_policy_loss / steps)
+        self.track_data("Loss / Value loss", cumulative_value_loss / steps)
         if self._entropy_loss_scale:
             self.track_data(
-                "Loss / Entropy loss", cumulative_entropy_loss / (self._learning_epochs * self._mini_batches)
+                "Loss / Entropy loss", cumulative_entropy_loss / steps
             )
 
         self.track_data("Policy / Standard deviation", stddev.mean().item())
